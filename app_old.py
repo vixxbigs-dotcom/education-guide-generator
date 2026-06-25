@@ -7,13 +7,38 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 
 st.set_page_config(page_title="교육 안내문 자동 생성기", page_icon="✉️", layout="wide")
+
+
+def load_local_env_file_once() -> None:
+    """python-dotenv 없이 프로젝트 루트의 .env 값을 환경변수로 읽어옵니다."""
+    import os
+    env_path = Path.cwd() / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        pass
+
+
+load_local_env_file_once()
 
 
 # -----------------------------
@@ -65,6 +90,11 @@ DEFAULT_VALUES = {
     "naver_background_message": "",
     "naver_map_background_message": "",
     "naver_address_background_message": "",
+    "naver_client_id_input": "",
+    "naver_client_secret_input": "",
+    "naver_local_results": [],
+    "naver_local_search_message": "",
+    "selected_naver_local_index": -1,
     "curriculum_title": "상세 커리큘럼",
     "curriculum_columns_text": "시간, 일차, 교육 내용, 강사/비고",
     "curriculum_column_defs": [
@@ -80,6 +110,7 @@ DEFAULT_VALUES = {
     "captured_map_file_path": "",
     "captured_map_files": {},
     "last_map_capture_message": "",
+    "pending_location_update": None,
 }
 
 WIDGET_KEYS_TO_CLEAR_ON_RESET = [
@@ -188,6 +219,177 @@ def file_path_to_data_url(file_path: str) -> str:
     return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
+
+def strip_html_tags(value: str) -> str:
+    """네이버 지역 검색 API title에 섞이는 <b> 태그 등을 제거합니다."""
+    text = re.sub(r"<[^>]+>", "", str(value or ""))
+    return html.unescape(text).strip()
+
+
+def normalize_naver_coord(value: object) -> float | None:
+    """네이버 지역 검색 API의 mapx/mapy 정수 좌표를 경도/위도 실수로 변환합니다."""
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    # 지역 검색 API는 WGS84 기준 정수형 좌표를 반환합니다. 보통 1e7로 나누면 경도/위도가 됩니다.
+    if abs(number) > 1000:
+        number = number / 10_000_000
+    return number
+
+
+def get_naver_local_api_credentials() -> tuple[str, str]:
+    """.env/환경변수 > st.secrets 순서로 네이버 검색 API 키를 가져옵니다.
+
+    최종 사용자는 API 키를 화면에 입력하지 않도록, 기본값은 프로젝트 루트의
+    .env 파일 또는 실행 환경변수에서 읽습니다.
+    """
+    try:
+        import os
+        env_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+        env_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+        if env_id and env_secret:
+            return env_id, env_secret
+    except Exception:
+        pass
+
+    try:
+        secret_id = str(st.secrets.get("NAVER_CLIENT_ID", "") or "").strip()
+        secret_secret = str(st.secrets.get("NAVER_CLIENT_SECRET", "") or "").strip()
+        if secret_id and secret_secret:
+            return secret_id, secret_secret
+    except Exception:
+        pass
+
+    return "", ""
+
+
+def has_naver_local_api_credentials() -> bool:
+    client_id, client_secret = get_naver_local_api_credentials()
+    return bool(client_id and client_secret)
+
+
+def queue_location_update(title: str = "", address: str = "", message: str = "") -> None:
+    """위젯 생성 이후에는 key 값을 직접 바꾸지 않고, 다음 rerun 초기에 반영하도록 임시 저장합니다."""
+    st.session_state.pending_location_update = {
+        "title": str(title or "").strip(),
+        "address": str(address or "").strip(),
+        "message": str(message or "").strip(),
+    }
+
+
+def apply_pending_location_update() -> None:
+    pending = st.session_state.get("pending_location_update")
+    if not pending:
+        return
+    title = str((pending or {}).get("title", "") or "").strip()
+    address = str((pending or {}).get("address", "") or "").strip()
+    message = str((pending or {}).get("message", "") or "").strip()
+    if title:
+        st.session_state.place_name = title
+    if address:
+        st.session_state.road_address = address
+    if title or address:
+        st.session_state.display_location_text = format_location_line(title, address)
+    if message:
+        st.session_state.last_address_fetch_message = message
+    st.session_state.pending_location_update = None
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def search_naver_local_api(query: str, client_id: str, client_secret: str, display: int = 5) -> dict:
+    """네이버 Developers 검색 > 지역 API로 장소 후보를 가져옵니다."""
+    query = str(query or "").strip()
+    if not query:
+        return {"ok": False, "message": "검색어를 입력해 주세요.", "items": []}
+    if not client_id or not client_secret:
+        return {"ok": False, "message": "장소 검색 설정을 확인해 주세요.", "items": []}
+
+    params = urlencode({"query": query, "display": max(1, min(int(display or 5), 5)), "start": 1, "sort": "random"})
+    api_url = f"https://openapi.naver.com/v1/search/local.json?{params}"
+    req = Request(
+        api_url,
+        headers={
+            "X-Naver-Client-Id": client_id,
+            "X-Naver-Client-Secret": client_secret,
+            "User-Agent": "education-notice-generator/1.0",
+        },
+        method="GET",
+    )
+
+    try:
+        with urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")[:500]
+        except Exception:
+            detail = ""
+        return {"ok": False, "message": f"네이버 지역 검색 API 오류: HTTP {exc.code} {detail}", "items": []}
+    except URLError as exc:
+        return {"ok": False, "message": f"네이버 지역 검색 API 연결 실패: {exc}", "items": []}
+    except Exception as exc:
+        return {"ok": False, "message": f"네이버 지역 검색 API 처리 실패: {exc}", "items": []}
+
+    items = []
+    for raw in payload.get("items", []) or []:
+        title = strip_html_tags(raw.get("title", ""))
+        road = strip_html_tags(raw.get("roadAddress", ""))
+        addr = strip_html_tags(raw.get("address", ""))
+        category = strip_html_tags(raw.get("category", ""))
+        link = str(raw.get("link", "") or "").strip()
+        lon = normalize_naver_coord(raw.get("mapx"))
+        lat = normalize_naver_coord(raw.get("mapy"))
+        items.append({
+            "title": title,
+            "category": category,
+            "roadAddress": road,
+            "address": addr,
+            "mapx": raw.get("mapx", ""),
+            "mapy": raw.get("mapy", ""),
+            "lon": lon,
+            "lat": lat,
+            "link": link,
+        })
+    return {"ok": True, "message": f"검색 결과 {len(items)}건을 가져왔습니다.", "items": items}
+
+
+def apply_naver_local_item(item: dict) -> None:
+    """검색 결과 카드에서 선택한 장소를 다음 rerun 때 안전하게 반영합니다."""
+    title = strip_html_tags(item.get("title", ""))
+    road = strip_html_tags(item.get("roadAddress", ""))
+    addr = strip_html_tags(item.get("address", ""))
+    chosen_address = road or addr
+    queue_location_update(title, chosen_address, "선택한 장소를 안내문에 반영했습니다.")
+    st.session_state.naver_local_search_message = ""
+
+
+def apply_first_naver_local_result() -> None:
+    """검색어 기준 첫 번째 장소 후보를 안내문 장소/주소에 반영합니다."""
+    query = str(st.session_state.get("place_name", "") or "").strip()
+    api_id, api_secret = get_naver_local_api_credentials()
+    result = search_naver_local_api(query, api_id, api_secret, 5)
+    items = result.get("items", []) or []
+    st.session_state.naver_local_results = items
+    if items:
+        first_item = items[0]
+        title = strip_html_tags(first_item.get("title", "")) or query
+        road = strip_html_tags(first_item.get("roadAddress", ""))
+        addr = strip_html_tags(first_item.get("address", ""))
+        chosen_address = road or addr
+        queue_location_update(title, chosen_address, "주소를 자동 입력했습니다.")
+        st.session_state.naver_local_search_message = ""
+    else:
+        st.session_state.last_address_fetch_message = result.get("message", "장소 후보를 찾지 못했습니다.")
+        st.session_state.naver_local_search_message = result.get("message", "")
+
+
+def naver_item_map_link(item: dict, fallback_query: str) -> str:
+    """선택 후보를 네이버 지도에서 열기 위한 링크를 만듭니다."""
+    title = item.get("title") or fallback_query
+    query = quote(str(title or "").strip())
+    return f"https://map.naver.com/p/search/{query}?c=16.00,0,0,0,dh"
+
 def capture_naver_map_region(place_query: str, wait_seconds: float = 8.0) -> tuple[bool, str]:
     """
     Playwright headless Chromium으로 네이버 지도 검색 URL을 백그라운드에서 열고,
@@ -220,7 +422,7 @@ def capture_naver_map_region(place_query: str, wait_seconds: float = 8.0) -> tup
             "지도 이미지를 좌표대로 자르려면 Pillow가 필요합니다. 터미널에서 `python -m pip install pillow`를 실행해 주세요.",
         )
 
-    map_url = f"https://map.naver.com/p/search/{quote(query)}?c=16.00,0,0,0,dh"
+    map_url = f"https://map.naver.com/p/search/{quote(query)}?c=15.00,0,0,0,dh"
     crop_box = (585, 87, 1785, 1047)
 
     try:
@@ -604,8 +806,14 @@ def fetch_road_address_callback() -> None:
 
 
 
-def capture_naver_map_variants(place_query: str, wait_seconds: float = 1.8) -> dict:
-    """네이버 지도 검색 화면만 빠르게 캡처합니다. 주소 추출 로직을 실행하지 않아 상대적으로 빠릅니다."""
+def capture_naver_map_variants(place_query: str, wait_seconds: float = 0.8) -> dict:
+    """
+    빠른 지도 캡처 전용 경로입니다.
+    - 주소 추출은 하지 않습니다.
+    - 네이버 지도 페이지를 한 번만 열고 viewport 한 장만 캡처합니다.
+    - 두 크기 이미지는 같은 원본 스크린샷에서 crop 합니다.
+    - 대기 시간은 짧게 두고, 실패하면 빠르게 종료합니다.
+    """
     query = str(place_query or "").strip()
     if not query:
         return {"ok": False, "message": "교육 장소명 / 검색어를 먼저 입력해 주세요.", "map_file_paths": {}}
@@ -654,13 +862,12 @@ def capture_naver_map_variants(place_query: str, wait_seconds: float = 1.8) -> d
                 ),
             )
             page = context.new_page()
-            page.goto(map_url, wait_until="domcontentloaded", timeout=45000)
+            page.goto(map_url, wait_until="domcontentloaded", timeout=15000)
             try:
-                page.wait_for_selector("iframe#searchIframe, canvas, [class*=map], [class*=Map]", timeout=9000)
+                page.wait_for_selector("iframe#searchIframe, canvas, [class*=map], [class*=Map], img", timeout=3500)
             except Exception:
                 pass
-            # 지도 타일이 붙을 최소 시간만 기다립니다. 주소 추출보다 빠른 캡처 전용 경로입니다.
-            page.wait_for_timeout(int(max(1.0, float(wait_seconds)) * 1000))
+            page.wait_for_timeout(int(max(0.4, float(wait_seconds)) * 1000))
             screenshot_bytes = page.screenshot(type="png", full_page=False, animations="disabled")
             browser.close()
 
@@ -668,6 +875,7 @@ def capture_naver_map_variants(place_query: str, wait_seconds: float = 1.8) -> d
         width, height = image.size
         map_file_paths = {}
         blank_notes = []
+
         for variant_name, crop_box in crop_boxes.items():
             left, top, right, bottom = crop_box
             if width < right or height < bottom:
@@ -679,15 +887,15 @@ def capture_naver_map_variants(place_query: str, wait_seconds: float = 1.8) -> d
             file_path = captures_dir / f"naver_map_capture_{safe_name}_{stamp}.png"
             cropped.save(file_path, format="PNG")
             map_file_paths[variant_name] = str(file_path)
-            if avg_stddev < 3:
+            if avg_stddev < 2.5:
                 blank_notes.append(variant_name)
 
         if not map_file_paths:
             return {"ok": False, "message": f"지도 캡처 화면 크기가 예상보다 작습니다. 현재 {width}x{height}입니다.", "map_file_paths": {}}
 
-        message = "지도 이미지를 2가지 크기로 캡처했습니다."
+        message = "지도 이미지를 가져왔습니다."
         if blank_notes:
-            message += " 단색에 가까운 캡처가 있어 확인이 필요합니다: " + ", ".join(blank_notes)
+            message += " 일부 캡처가 단색에 가깝습니다. 필요하면 직접 첨부 이미지를 사용해 주세요."
         return {"ok": True, "message": message, "map_file_paths": map_file_paths}
     except Exception as exc:
         return {"ok": False, "message": f"지도 이미지 가져오기에 실패했습니다. 상세: {exc}", "map_file_paths": {}}
@@ -717,9 +925,9 @@ def start_naver_map_background_job() -> None:
         st.session_state.naver_map_background_message = "이미 지도 이미지 가져오기가 실행 중입니다. 잠시 후 결과를 확인해 주세요."
         return
     executor = get_naver_executor()
-    st.session_state.naver_map_future = executor.submit(capture_naver_map_variants, query, 1.8)
+    st.session_state.naver_map_future = executor.submit(capture_naver_map_variants, query, 0.8)
     st.session_state.naver_map_started_at = time.time()
-    st.session_state.naver_map_background_message = "지도 이미지 가져오기를 백그라운드에서 시작했습니다. 다른 입력 작업을 계속할 수 있습니다."
+    st.session_state.naver_map_background_message = "지도 이미지를 가져오는 중입니다."
 
 
 def start_naver_address_background_job() -> None:
@@ -743,7 +951,7 @@ def poll_split_naver_jobs() -> None:
         if not map_future.done():
             started = st.session_state.get("naver_map_started_at", time.time())
             elapsed = int(time.time() - started)
-            st.session_state.naver_map_background_message = f"지도 이미지 가져오는 중... 약 {elapsed}초 경과."
+            st.session_state.naver_map_background_message = f"지도 이미지 가져오는 중... {elapsed}초"
         else:
             try:
                 result = map_future.result()
@@ -757,7 +965,7 @@ def poll_split_naver_jobs() -> None:
                 st.session_state.captured_map_file_path = chosen_path
                 st.session_state.captured_map_data_url = ""
                 st.session_state.last_captured_map_file = chosen_path
-                st.session_state.last_map_capture_message = "지도 이미지를 2가지 크기로 자동 캡처했습니다. 아래에서 사용할 크기를 선택할 수 있습니다."
+                st.session_state.last_map_capture_message = "지도 이미지를 가져왔습니다. 아래에서 사용할 크기를 선택해 주세요."
             st.session_state.naver_map_background_message = result.get("message", "지도 이미지 작업이 완료되었습니다.")
 
     address_future = st.session_state.get("naver_address_future")
@@ -1440,6 +1648,37 @@ st.markdown(
     div[style*="overflow"]::-webkit-scrollbar-track {
         background: #111111;
         border-radius: 999px;
+    }
+
+
+
+    .naver-local-card {
+        border: 1px solid #3A3A3A;
+        background: #242424;
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin: 8px 0 6px 0;
+    }
+
+    .naver-local-card-title {
+        color: #FFFFFF;
+        font-weight: 850;
+        font-size: 14px;
+        line-height: 1.35;
+        margin-bottom: 5px;
+    }
+
+    .naver-local-card-meta {
+        color: #B8B8B8;
+        font-size: 12px;
+        line-height: 1.55;
+    }
+
+    .naver-local-card-address {
+        color: #F0F0F0;
+        font-size: 12.5px;
+        line-height: 1.55;
+        margin-top: 4px;
     }
 
     /* 좌측 입력부 내부 카드 간격 압축 */
@@ -2179,6 +2418,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 # 쿼리 파라미터 기반 스포이드 색상 반영
 # -----------------------------
 init_defaults()
+apply_pending_location_update()
 poll_split_naver_jobs()
 
 picked_color = get_query_param("picked_color")
@@ -2220,90 +2460,84 @@ with col_input:
             place_name = st.text_input("교육 장소명 / 검색어", key="place_name")
 
             naver_map_query = quote(str(place_name or "").strip())
-            naver_map_url = f"https://map.naver.com/p/search/{naver_map_query}?c=16.00,0,0,0,dh" if naver_map_query else "https://map.naver.com/p/search/"
+            naver_map_url = f"https://map.naver.com/p/search/{naver_map_query}?c=15.00,0,0,0,dh" if naver_map_query else "https://map.naver.com/p/search/"
             st.markdown(
                 f'<a class="naver-map-button" href="{naver_map_url}" target="_blank" rel="noopener noreferrer">🗺️ 네이버 지도 바로가기</a>',
                 unsafe_allow_html=True,
             )
 
+            with st.expander("장소 후보 검색", expanded=False):
+                if st.button("🔎 장소 검색", use_container_width=True):
+                    api_id, api_secret = get_naver_local_api_credentials()
+                    result = search_naver_local_api(str(st.session_state.get("place_name", "") or ""), api_id, api_secret, 5)
+                    st.session_state.naver_local_results = result.get("items", [])
+                    st.session_state.naver_local_search_message = result.get("message", "")
+
+                api_message = st.session_state.get("naver_local_search_message", "")
+                if api_message:
+                    st.caption(api_message)
+
+                local_results = st.session_state.get("naver_local_results", []) or []
+                if local_results:
+                    for idx, item in enumerate(local_results, start=1):
+                        title = esc(item.get("title", ""))
+                        category = esc(item.get("category", ""))
+                        road = esc(item.get("roadAddress", ""))
+                        addr = esc(item.get("address", ""))
+                        lon = item.get("lon")
+                        lat = item.get("lat")
+                        coord_text = f"{lon:.7f}, {lat:.7f}" if isinstance(lon, float) and isinstance(lat, float) else ""
+                        link = naver_item_map_link(item, str(st.session_state.get("place_name", "") or ""))
+                        st.markdown(
+                            f"""<div class="naver-local-card">
+                                <div class="naver-local-card-title">{idx}. {title}</div>
+                                <div class="naver-local-card-meta">{category}</div>
+                                <div class="naver-local-card-address">{road or addr}</div>
+                                <div class="naver-local-card-meta">{coord_text}</div>
+                                <div class="naver-local-card-meta"><a href="{esc_attr(link)}" target="_blank" rel="noopener noreferrer">네이버 지도에서 열기</a></div>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+                        st.button(
+                            f"이 장소 사용 #{idx}",
+                            key=f"use_naver_local_{idx}",
+                            use_container_width=True,
+                            on_click=apply_naver_local_item,
+                            args=(item,),
+                        )
+                else:
+                    st.caption("장소 검색을 누르면 후보가 표시됩니다.")
+
             col_auto1, col_auto2 = st.columns(2)
             with col_auto1:
                 st.button(
-                    "🖼️ 지도 이미지 가져오기",
+                    "📍 주소 자동 입력",
                     use_container_width=True,
-                    on_click=start_naver_map_background_job,
-                    help="주소 추출 없이 지도 화면만 캡처합니다. 두 가지 크기를 동시에 저장하므로 기존 통합 기능보다 빠르게 끝날 가능성이 큽니다.",
+                    on_click=apply_first_naver_local_result,
+                    help="첫 번째 장소 후보의 주소를 바로 입력합니다.",
                 )
             with col_auto2:
-                st.button(
-                    "📍 도로명 주소 가져오기",
-                    use_container_width=True,
-                    on_click=start_naver_address_background_job,
-                    help="첫 번째 검색 결과를 클릭해 도로명 주소만 가져옵니다. 네이버 상세 페이지 로딩 때문에 지도 캡처보다 오래 걸릴 수 있습니다.",
-                )
-
-            if st.button("🧹 지도/주소 결과 비우기", use_container_width=True):
-                st.session_state.road_address = ""
-                st.session_state.captured_map_data_url = ""
-                st.session_state.captured_map_file_path = ""
-                st.session_state.pop("last_captured_map_file", None)
-                st.session_state.pop("captured_map_files", None)
-                st.session_state.pop("naver_map_future", None)
-                st.session_state.pop("naver_address_future", None)
-                st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
-                st.session_state.last_address_fetch_message = "도로명 주소를 비웠습니다."
-                st.session_state.naver_map_background_message = "지도 결과를 비웠습니다."
-                st.session_state.naver_address_background_message = "주소 결과를 비웠습니다."
-
-            map_background_message = st.session_state.get("naver_map_background_message", "")
-            if map_background_message:
-                st.caption(map_background_message)
-            if st.session_state.get("naver_map_future") is not None:
-                st.markdown(
-                    '<div class="mini-loading"><span class="mini-spinner"></span><span>지도 이미지를 가져오는 중입니다. 다른 입력 작업을 계속할 수 있습니다.</span></div>',
-                    unsafe_allow_html=True,
-                )
-
-            address_background_message = st.session_state.get("naver_address_background_message", "")
-            if address_background_message:
-                st.caption(address_background_message)
-            if st.session_state.get("naver_address_future") is not None:
-                st.markdown(
-                    '<div class="mini-loading"><span class="mini-spinner"></span><span>도로명 주소를 가져오는 중입니다. 다른 입력 작업을 계속할 수 있습니다.</span></div>',
-                    unsafe_allow_html=True,
-                )
+                if st.button("🧹 지도/주소 결과 비우기", use_container_width=True):
+                    st.session_state.road_address = ""
+                    st.session_state.captured_map_data_url = ""
+                    st.session_state.captured_map_file_path = ""
+                    st.session_state.pop("last_captured_map_file", None)
+                    st.session_state.pop("captured_map_files", None)
+                    st.session_state.pop("naver_map_future", None)
+                    st.session_state.pop("naver_address_future", None)
+                    st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
+                    st.session_state.last_address_fetch_message = "도로명 주소를 비웠습니다."
+                    st.session_state.naver_map_background_message = ""
+                    st.session_state.naver_address_background_message = ""
 
             road_address = st.text_input(
                 "가져온 도로명 주소",
                 key="road_address",
-                help="네이버 지도에서 자동으로 가져온 주소입니다. 최종 안내문 문구는 아래 '안내문 표시 내용'에서 직접 수정할 수 있습니다.",
+                help="API로 가져온 주소입니다. 최종 안내문 문구는 아래 '안내문 표시 내용'에서 직접 수정할 수 있습니다.",
             )
             last_address_fetch_message = st.session_state.get("last_address_fetch_message", "")
             if last_address_fetch_message:
                 st.caption(last_address_fetch_message)
-
-            captured_map_files = st.session_state.get("captured_map_files", {}) or {}
-            if captured_map_files:
-                variant_options = [name for name in ["작은 크기 (1000×800)", "일반 크기 (1200×960)"] if name in captured_map_files]
-                variant_options += [name for name in captured_map_files.keys() if name not in variant_options]
-                selected_variant = st.selectbox(
-                    "사용할 지도 이미지 크기",
-                    variant_options,
-                    key="selected_map_capture_variant",
-                    help="자동 캡처 시 두 가지 크기로 저장됩니다. 여기서 안내문에 넣을 이미지를 고르면 됩니다.",
-                )
-                captured_map_path = captured_map_files.get(selected_variant, "")
-                st.session_state.captured_map_file_path = captured_map_path
-                st.session_state.last_captured_map_file = captured_map_path
-            else:
-                captured_map_path = st.session_state.get("captured_map_file_path", "") or st.session_state.get("last_captured_map_file", "")
-            captured_map_data_url = file_path_to_data_url(captured_map_path) or st.session_state.get("captured_map_data_url", "")
-            last_map_capture_message = st.session_state.get("last_map_capture_message", "")
-            if last_map_capture_message:
-                st.caption(last_map_capture_message)
-            if captured_map_data_url:
-                st.image(captured_map_data_url, caption="자동 캡처된 지도 이미지", use_container_width=True)
-                st.caption("현재 지도 영역에는 선택한 자동 캡처 이미지가 적용됩니다. 다른 이미지를 직접 첨부하면 첨부 이미지가 우선 적용됩니다.")
 
             display_location_text = st.text_area(
                 "안내문 표시 내용",
@@ -2312,10 +2546,46 @@ with col_input:
                 help="최종 HTML/이미지 안내문의 교육 장소 영역에 들어갈 문구입니다. 예: 멀티캠퍼스 선릉  (서울 강남구 선릉로 428)",
             )
 
+            st.markdown(
+                """
+                <div class="capture-guide">
+                    <strong>지도 자동 캡처</strong><br>
+                    이전에 비교적 안정적으로 동작했던 방식으로 되돌렸습니다. 네이버 지도 로딩을 충분히 기다린 뒤 1920×1080 기준 (585, 87)~(1785, 1047) 영역을 캡처합니다.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_map_cap1, col_map_cap2 = st.columns([1, 1])
+            with col_map_cap1:
+                if st.button("📸 지도 자동 캡처", use_container_width=True):
+                    with st.spinner("네이버 지도 검색 화면을 열고 캡처 중입니다. 환경에 따라 20~40초 정도 걸릴 수 있습니다..."):
+                        ok, message = capture_naver_map_region(place_name)
+                    st.session_state.last_map_capture_message = message
+                    if ok:
+                        st.success(message)
+                    else:
+                        st.error(message)
+            with col_map_cap2:
+                if st.button("🧹 캡처 지도 제거", use_container_width=True):
+                    st.session_state.captured_map_data_url = ""
+                    st.session_state.captured_map_file_path = ""
+                    st.session_state.pop("last_captured_map_file", None)
+                    st.session_state.pop("captured_map_files", None)
+                    st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
+
+            captured_map_path = st.session_state.get("captured_map_file_path", "") or st.session_state.get("last_captured_map_file", "")
+            captured_map_data_url = file_path_to_data_url(captured_map_path) or st.session_state.get("captured_map_data_url", "")
+            last_map_capture_message = st.session_state.get("last_map_capture_message", "")
+            if last_map_capture_message:
+                st.caption(last_map_capture_message)
+            if captured_map_data_url:
+                st.image(captured_map_data_url, caption="자동 캡처된 지도 이미지", use_container_width=True)
+                st.caption("현재 지도 영역에는 자동 캡처 이미지가 적용됩니다. 다른 이미지를 직접 첨부하면 첨부 이미지가 우선 적용됩니다.")
+
             map_file = st.file_uploader(
                 "지도 이미지 첨부",
                 type=["png", "jpg", "jpeg", "gif", "webp"],
-                help="캡처 기능이 환경상 동작하지 않을 때는 직접 저장한 지도 이미지를 첨부해 주세요.",
+                help="자동 캡처가 느리거나 실패하면 직접 저장한 지도 이미지를 첨부해 주세요.",
                 key="map_file_uploader",
             )
             map_image_src = file_to_data_url(map_file) or captured_map_data_url
