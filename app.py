@@ -15,7 +15,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 
-st.set_page_config(page_title="교육 안내문 자동 생성기", page_icon="✉️", layout="wide")
+st.set_page_config(page_title="교육 안내문 작성 도구 (Beta)", page_icon="✉️", layout="wide")
 
 
 def load_local_env_file_once() -> None:
@@ -154,6 +154,9 @@ def reset_all_fields() -> None:
     st.session_state.pop("naver_map_started_at", None)
     st.session_state.pop("naver_address_future", None)
     st.session_state.pop("naver_address_started_at", None)
+    for key in list(st.session_state.keys()):
+        if key.startswith("white_grid_") or key.endswith("_white_rows"):
+            st.session_state.pop(key, None)
     st.cache_data.clear()
     st.cache_resource.clear()
 
@@ -1291,6 +1294,151 @@ def sanitize_file_name(value: str) -> str:
     return name or "education_notice_photo_style"
 
 
+def _safe_widget_key_part(value: object) -> str:
+    """동적 입력 위젯 key에 쓸 수 있도록 컬럼명을 정리합니다."""
+    text_value = str(value or "").strip()
+    text_value = re.sub(r"[^0-9A-Za-z가-힣_]+", "_", text_value)
+    text_value = text_value.strip("_")
+    return text_value or "column"
+
+
+def _normalize_editor_rows(records: object, columns: list[str], min_rows: int = 1) -> list[dict]:
+    normalized_rows: list[dict] = []
+    for row in to_records(records):
+        normalized_row = {column: _cell_value_by_column(row, column) for column in columns}
+        if any(str(value or "").strip() for value in normalized_row.values()):
+            normalized_rows.append(normalized_row)
+    while len(normalized_rows) < max(1, int(min_rows or 1)):
+        normalized_rows.append({column: "" for column in columns})
+    return normalized_rows
+
+
+def render_white_theme_grid_editor(
+    records: object,
+    columns: list[str],
+    key_prefix: str,
+    column_labels: dict[str, str] | None = None,
+    min_rows: int = 1,
+    add_button_label: str = "행 추가",
+) -> list[dict]:
+    """화이트 모드 전용 단순 편집기입니다.
+
+    st.data_editor는 내부 셀을 canvas로 렌더링해서, 앱 기본 테마가 다크로 고정된 경우
+    CSS만으로 셀 배경/글자색을 안정적으로 바꾸기 어렵습니다. 화이트 모드에서는
+    흰 배경 + 검정 글씨의 기본 입력창 기반 편집기를 사용합니다.
+    """
+    column_labels = column_labels or {}
+    rows_key = f"white_grid_{key_prefix}_rows"
+
+    if rows_key not in st.session_state:
+        st.session_state[rows_key] = _normalize_editor_rows(records, columns, min_rows=min_rows)
+
+    rows = st.session_state.get(rows_key, [])
+    if not isinstance(rows, list):
+        rows = []
+    rows = _normalize_editor_rows(rows, columns, min_rows=min_rows)
+
+    st.markdown(
+        """
+        <style>
+        .white-grid-editor {
+            border: 1px solid #c9c9c9;
+            border-radius: 12px;
+            background: #FFFFFF;
+            padding: 10px 10px 8px 10px;
+            margin: 6px 0 10px 0;
+        }
+        .white-grid-header {
+            color: #111827;
+            font-size: 12px;
+            line-height: 18px;
+            font-weight: 850;
+            padding: 0 2px 4px 2px;
+        }
+        .white-grid-editor div[data-baseweb="input"] > div,
+        .white-grid-editor input {
+            background: #FFFFFF !important;
+            color: #111827 !important;
+            border-color: #c9c9c9 !important;
+            caret-color: #111827 !important;
+        }
+        .white-grid-editor input::placeholder {
+            color: #9CA3AF !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="white-grid-editor">', unsafe_allow_html=True)
+
+    if len(columns) == 1:
+        header_cols = st.columns([1, 0.13])
+    else:
+        weights = [1.8 if any(token in column for token in ["내용", "주제", "과정", "비고", "메모", "role"]) else 1 for column in columns]
+        header_cols = st.columns(weights + [0.13])
+    for idx, column in enumerate(columns):
+        header_cols[idx].markdown(
+            f'<div class="white-grid-header">{esc(column_labels.get(column, column))}</div>',
+            unsafe_allow_html=True,
+        )
+    header_cols[-1].markdown('<div class="white-grid-header">삭제</div>', unsafe_allow_html=True)
+
+    edited_rows: list[dict] = []
+    delete_index: int | None = None
+    for row_idx, row in enumerate(rows):
+        if len(columns) == 1:
+            row_cols = st.columns([1, 0.13], vertical_alignment="center")
+        else:
+            weights = [1.8 if any(token in column for token in ["내용", "주제", "과정", "비고", "메모", "role"]) else 1 for column in columns]
+            row_cols = st.columns(weights + [0.13], vertical_alignment="center")
+        new_row: dict[str, str] = {}
+        for col_idx, column in enumerate(columns):
+            safe_column = _safe_widget_key_part(column)
+            widget_key = f"white_grid_{key_prefix}_{row_idx}_{safe_column}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = str(row.get(column, "") or "")
+            new_row[column] = row_cols[col_idx].text_input(
+                column_labels.get(column, column),
+                key=widget_key,
+                label_visibility="collapsed",
+                placeholder=column_labels.get(column, column),
+            )
+        if row_cols[-1].button("×", key=f"white_grid_{key_prefix}_{row_idx}_delete", help="이 행 삭제"):
+            delete_index = row_idx
+        edited_rows.append(new_row)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if delete_index is not None:
+        edited_rows.pop(delete_index)
+        if not edited_rows:
+            edited_rows = [{column: "" for column in columns}]
+        st.session_state[rows_key] = edited_rows
+        for key in list(st.session_state.keys()):
+            if key.startswith(f"white_grid_{key_prefix}_") and key != rows_key:
+                st.session_state.pop(key, None)
+        st.rerun()
+
+    action_cols = st.columns([1, 1])
+    if action_cols[0].button(add_button_label, key=f"white_grid_{key_prefix}_add", use_container_width=True):
+        edited_rows.append({column: "" for column in columns})
+        st.session_state[rows_key] = edited_rows
+        st.rerun()
+    if action_cols[1].button("빈 행 정리", key=f"white_grid_{key_prefix}_clean", use_container_width=True):
+        cleaned = [row for row in edited_rows if any(str(value or "").strip() for value in row.values())]
+        if not cleaned:
+            cleaned = [{column: "" for column in columns}]
+        st.session_state[rows_key] = cleaned
+        for key in list(st.session_state.keys()):
+            if key.startswith(f"white_grid_{key_prefix}_") and key != rows_key:
+                st.session_state.pop(key, None)
+        st.rerun()
+
+    st.session_state[rows_key] = edited_rows
+    return edited_rows
+
+
 def build_download_html_document(final_mail_html: str, font_stack: str, page_title: str = "교육 안내문") -> str:
     """브라우저에서 HTML 파일을 직접 열어도 한글이 깨지지 않도록 완성형 문서로 감쌉니다."""
     safe_title = html.escape(str(page_title or "교육 안내문"), quote=False)
@@ -1446,8 +1594,15 @@ st.markdown(
         font-size: 12px;
         line-height: 18px;
         text-align: right;
-        margin-top: -4px;
+        margin-top: 28px;
         margin-bottom: 4px;
+        font-weight: 800;
+    }
+
+    .st-key-app_theme {
+        position: relative;
+        z-index: 1;
+        margin-bottom: 10px;
     }
 
     /* 카드형 입력/출력 섹션 */
@@ -2110,11 +2265,120 @@ if app_theme == "화이트 모드":
         unsafe_allow_html=True,
     )
 
+
+
+# 화이트 모드: Glide Data Editor 내부 검정 배경 추가 보정
+# st.data_editor는 내부 일부를 canvas/Glide Data Grid로 렌더링하기 때문에
+# 일반 stDataFrame 선택자만으로는 검정 배경이 남을 수 있어 전용 클래스를 한 번 더 보정합니다.
+if app_theme == "화이트 모드":
+    st.markdown(
+        """
+        <style>
+        /* 커리큘럼/문의처 data_editor 최외곽 */
+        .stApp .st-key-curr_editor,
+        .stApp .st-key-contacts_editor,
+        .stApp .st-key-curr_editor [data-testid="stDataFrame"],
+        .stApp .st-key-contacts_editor [data-testid="stDataFrame"] {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+
+        /* Glide Data Editor 내부 스크롤 영역 */
+        .stApp .st-key-curr_editor .stDataFrameGlideDataEditor,
+        .stApp .st-key-contacts_editor .stDataFrameGlideDataEditor,
+        .stApp .st-key-curr_editor .dvn-scroller,
+        .stApp .st-key-contacts_editor .dvn-scroller,
+        .stApp div.stDataFrameGlideDataEditor,
+        .stApp div.dvn-scroller.stDataFrameGlideDataEditor {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            background: #7b7b7b !important;
+            background-color: #7b7b7b !important;
+            color: #FFFFFF !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+
+        /* Glide 내부 wrapper까지 검정 배경 제거 */
+        .stApp .stDataFrameGlideDataEditor > div,
+        .stApp .stDataFrameGlideDataEditor > div > div,
+        .stApp .dvn-scroller > div,
+        .stApp .dvn-scroller > div > div {
+            background: #7b7b7b !important;
+            background-color: #7b7b7b !important;
+            border-color: #c9c9c9 !important;
+            color: #FFFFFF !important;
+        }
+
+        /* canvas 자체의 배경 보정 */
+        .stApp .stDataFrameGlideDataEditor canvas,
+        .stApp .dvn-scroller canvas,
+        .stApp [data-testid="stDataFrame"] canvas {
+            background: #7b7b7b !important;
+            background-color: #7b7b7b !important;
+            border-radius: 12px !important;
+        }
+
+        /* data_editor 내부 툴바/셀렉터/버튼 계열 */
+        .stApp .stDataFrameGlideDataEditor button,
+        .stApp .stDataFrameGlideDataEditor [role="button"],
+        .stApp .stDataFrameGlideDataEditor input,
+        .stApp .stDataFrameGlideDataEditor textarea,
+        .stApp .dvn-scroller button,
+        .stApp .dvn-scroller [role="button"],
+        .stApp .dvn-scroller input,
+        .stApp .dvn-scroller textarea {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            min-height: 36px !important;
+            font-size: 13px !important;
+            font-weight: 800 !important;
+            color: #FFFFFF !important;
+            background: #7b7b7b !important;
+            background-color: #7b7b7b !important;
+            cursor: pointer !important;
+            box-shadow: none !important;
+        }
+
+        /* 내부 스크롤바 */
+        .stApp .stDataFrameGlideDataEditor::-webkit-scrollbar,
+        .stApp .dvn-scroller::-webkit-scrollbar,
+        .stApp .stDataFrameGlideDataEditor *::-webkit-scrollbar,
+        .stApp .dvn-scroller *::-webkit-scrollbar {
+            width: 9px !important;
+            height: 9px !important;
+        }
+
+        .stApp .stDataFrameGlideDataEditor::-webkit-scrollbar-thumb,
+        .stApp .dvn-scroller::-webkit-scrollbar-thumb,
+        .stApp .stDataFrameGlideDataEditor *::-webkit-scrollbar-thumb,
+        .stApp .dvn-scroller *::-webkit-scrollbar-thumb {
+            background: #7b7b7b !important;
+            border: 2px solid #F1F3F5 !important;
+            border-radius: 999px !important;
+        }
+
+        .stApp .stDataFrameGlideDataEditor::-webkit-scrollbar-track,
+        .stApp .dvn-scroller::-webkit-scrollbar-track,
+        .stApp .stDataFrameGlideDataEditor *::-webkit-scrollbar-track,
+        .stApp .dvn-scroller *::-webkit-scrollbar-track {
+            background: #F1F3F5 !important;
+            border-radius: 999px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 top_title_col, top_theme_col = st.columns([1.0, 0.24], vertical_alignment="top")
 with top_title_col:
-    st.markdown('<div class="main-title">✉️ 교육 안내문 자동 생성기</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">✉️ 교육 안내문 작성 도구 (Beta)</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">필수 정보를 입력하면 아웃룩 메일 본문용 HTML과 PNG/JPG 이미지 안내문을 함께 생성합니다.</div>',
+        '<div class="sub-title">교육 안내문 작성과 아웃룩 본문용 HTML·PNG/JPG 생성을 지원하는 내부 테스트용 도구입니다.</div>',
         unsafe_allow_html=True,
     )
 with top_theme_col:
@@ -3155,15 +3419,25 @@ with col_input:
             curriculum_title = st.text_input("커리큘럼 표 이름", key="curriculum_title")
 
             with st.expander("표 헤더 편집", expanded=False):
-                header_editor_data = st.data_editor(
-                    st.session_state.curriculum_column_defs,
-                    num_rows="dynamic",
-                    hide_index=True,
-                    column_order=["column_name"],
-                    column_config={"column_name": st.column_config.TextColumn("표 헤더명", required=True)},
-                    width="stretch",
-                    key="curriculum_column_defs_editor",
-                )
+                if st.session_state.get("app_theme") == "화이트 모드":
+                    header_editor_data = render_white_theme_grid_editor(
+                        st.session_state.curriculum_column_defs,
+                        ["column_name"],
+                        key_prefix="curriculum_column_defs_editor",
+                        column_labels={"column_name": "표 헤더명"},
+                        min_rows=1,
+                        add_button_label="표 헤더 추가",
+                    )
+                else:
+                    header_editor_data = st.data_editor(
+                        st.session_state.curriculum_column_defs,
+                        num_rows="dynamic",
+                        hide_index=True,
+                        column_order=["column_name"],
+                        column_config={"column_name": st.column_config.TextColumn("표 헤더명", required=True)},
+                        width="stretch",
+                        key="curriculum_column_defs_editor",
+                    )
                 header_records = to_records(header_editor_data)
                 curriculum_columns = [str(row.get("column_name", "") or "").strip() for row in header_records]
                 curriculum_columns = [col for col in curriculum_columns if col]
@@ -3180,14 +3454,24 @@ with col_input:
             curriculum_columns_text = ", ".join(curriculum_columns)
 
             curriculum_editor_data = normalize_curriculum_for_columns(st.session_state.curriculum, curriculum_columns)
-            edited_curr = st.data_editor(
-                curriculum_editor_data,
-                num_rows="dynamic",
-                column_order=curriculum_columns,
-                column_config={column: column for column in curriculum_columns},
-                width="stretch",
-                key="curr_editor",
-            )
+            if st.session_state.get("app_theme") == "화이트 모드":
+                edited_curr = render_white_theme_grid_editor(
+                    curriculum_editor_data,
+                    curriculum_columns,
+                    key_prefix="curr_editor",
+                    column_labels={column: column for column in curriculum_columns},
+                    min_rows=1,
+                    add_button_label="커리큘럼 행 추가",
+                )
+            else:
+                edited_curr = st.data_editor(
+                    curriculum_editor_data,
+                    num_rows="dynamic",
+                    column_order=curriculum_columns,
+                    column_config={column: column for column in curriculum_columns},
+                    width="stretch",
+                    key="curr_editor",
+                )
             st.session_state.curriculum = to_records(edited_curr)
 
         # 5. 장소
@@ -3353,13 +3637,23 @@ with col_input:
             st.markdown("#### 안내 사항 / 문의처")
             info_text = st.text_area("안내 사항 문구", key="info_text", height=120)
 
-            edited_contacts = st.data_editor(
-                st.session_state.contacts,
-                num_rows="dynamic",
-                column_config={"role": "소속 + 이름 + 직급", "phone": "연락처"},
-                width="stretch",
-                key="contacts_editor",
-            )
+            if st.session_state.get("app_theme") == "화이트 모드":
+                edited_contacts = render_white_theme_grid_editor(
+                    st.session_state.contacts,
+                    ["role", "phone"],
+                    key_prefix="contacts_editor",
+                    column_labels={"role": "소속 + 이름 + 직급", "phone": "연락처"},
+                    min_rows=1,
+                    add_button_label="문의처 행 추가",
+                )
+            else:
+                edited_contacts = st.data_editor(
+                    st.session_state.contacts,
+                    num_rows="dynamic",
+                    column_config={"role": "소속 + 이름 + 직급", "phone": "연락처"},
+                    width="stretch",
+                    key="contacts_editor",
+                )
 
 
 
