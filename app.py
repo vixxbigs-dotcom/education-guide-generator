@@ -17,6 +17,32 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="교육 안내문 자동 생성기", page_icon="✉️", layout="wide")
 
+st.markdown("""
+<style>
+[data-testid="stToolbar"] {
+    visibility: hidden;
+    height: 0%;
+    position: fixed;
+}
+
+[data-testid="stDecoration"] {
+    display: none;
+}
+
+header[data-testid="stHeader"] {
+    background: transparent;
+}
+
+#MainMenu {
+    visibility: hidden;
+}
+
+footer {
+    visibility: hidden;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 def load_local_env_file_once() -> None:
     """python-dotenv 없이 프로젝트 루트의 .env 값을 환경변수로 읽어옵니다."""
