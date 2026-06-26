@@ -17,32 +17,6 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="교육 안내문 자동 생성기", page_icon="✉️", layout="wide")
 
-st.markdown("""
-<style>
-[data-testid="stToolbar"] {
-    visibility: hidden;
-    height: 0%;
-    position: fixed;
-}
-
-[data-testid="stDecoration"] {
-    display: none;
-}
-
-header[data-testid="stHeader"] {
-    background: transparent;
-}
-
-#MainMenu {
-    visibility: hidden;
-}
-
-footer {
-    visibility: hidden;
-}
-</style>
-""", unsafe_allow_html=True)
-
 
 def load_local_env_file_once() -> None:
     """python-dotenv 없이 프로젝트 루트의 .env 값을 환경변수로 읽어옵니다."""
@@ -81,9 +55,9 @@ DEFAULT_CURRICULUM = [
 ]
 
 DEFAULT_CONTACTS = [
-    {"role": "현장운영자 최유리 프로", "phone": "010-9522-4395"},
-    {"role": "멀티캠퍼스 남은주 프로", "phone": "010-7791-9971"},
-    {"role": "한솔그룹 최종범 책임", "phone": "010-5104-9658"},
+    {"role": "현장운영자 000 프로", "phone": "010-0000-0000"},
+    {"role": "멀티캠퍼스 000 프로", "phone": "010-0000-0000"},
+    {"role": "00그룹 000 책임", "phone": "010-0000-0000"},
 ]
 
 DEFAULT_VALUES = {
@@ -94,6 +68,7 @@ DEFAULT_VALUES = {
     "welcome_title": "입과를 환영합니다!",
     "welcome_body_text": "{교육명}\n강의에 입과하신 여러분 환영합니다! 해당 강의는 {운영방식}으로 진행되며,\n하기 내용을 사전에 꼭 확인하신 후 입과해주시길 부탁드립니다.",
     "time_notice_text": "특히, 교육 시작시간은 1일차 {1일차}시, 2일차 {2일차}시이니 일정 확인 부탁드립니다.",
+    "app_theme": "다크 모드",
     "main_color_picker": "#0088C9",
     "footer_color_picker": "#00A651",
     "curr_header_text_color_picker": "#FFFFFF",
@@ -161,8 +136,10 @@ def init_defaults() -> None:
 
 
 def reset_all_fields() -> None:
+    current_app_theme = st.session_state.get("app_theme", DEFAULT_VALUES["app_theme"])
     for key, value in DEFAULT_VALUES.items():
         st.session_state[key] = value
+    st.session_state.app_theme = current_app_theme
     st.session_state.curriculum = [row.copy() for row in DEFAULT_CURRICULUM]
     st.session_state.contacts = [row.copy() for row in DEFAULT_CONTACTS]
     for key in WIDGET_KEYS_TO_CLEAR_ON_RESET:
@@ -1415,6 +1392,12 @@ def render_template_html(template: str, replacements: dict[str, str]) -> str:
 # -----------------------------
 # Streamlit UI 스타일
 # -----------------------------
+init_defaults()
+
+# 화면 테마는 상단 우측 셀렉트박스에서 바꿉니다.
+# CSS는 위젯 렌더링 전 현재 session_state 값을 기준으로 먼저 적용합니다.
+app_theme = st.session_state.get("app_theme", DEFAULT_VALUES["app_theme"])
+
 st.markdown(
     """
     <style>
@@ -1456,6 +1439,15 @@ st.markdown(
         font-size: 14px;
         color: var(--muted);
         margin-bottom: 22px;
+    }
+
+    .theme-select-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 18px;
+        text-align: right;
+        margin-top: -4px;
+        margin-bottom: 4px;
     }
 
     /* 카드형 입력/출력 섹션 */
@@ -1753,17 +1745,401 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="main-title">✉️ 교육 안내문 자동 생성기</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sub-title">필수 정보를 입력하면 아웃룩 메일 본문용 HTML과 PNG/JPG 이미지 안내문을 함께 생성합니다.</div>',
-    unsafe_allow_html=True,
-)
+if app_theme == "화이트 모드":
+    st.markdown(
+        """
+        <style>
+        :root {
+            --app-bg: #F4F6F8;
+            --card-bg: #FFFFFF;
+            --card-bg-strong: #F8FAFC;
+            --field-bg: #FFFFFF;
+            --field-bg-focus: #F9FAFB;
+            --line: #E5E7EB;
+            --line-strong: #c9c9c9;
+            --text: #111827;
+            --muted: #64748B;
+            --soft: #F1F5F9;
+            --button-bg: #7b7b7b;
+            --button-text: #FFFFFF;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #FFFFFF !important;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+        }
+
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="textarea"] > div,
+        div[data-baseweb="select"] > div {
+            background-color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+        }
+
+        input,
+        textarea,
+        [data-baseweb="input"],
+        [data-baseweb="textarea"],
+        [data-baseweb="select"] {
+            border-color: #c9c9c9 !important;
+        }
+
+        [data-testid="stColorPicker"] input,
+        [data-testid="stNumberInput"] input {
+            border-color: #c9c9c9 !important;
+        }
+
+        div[data-baseweb="input"] > div:focus-within,
+        div[data-baseweb="textarea"] > div:focus-within,
+        div[data-baseweb="select"] > div:focus-within {
+            border-color: #111827 !important;
+            background-color: #FFFFFF !important;
+            box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.16) !important;
+        }
+
+        .stTextInput input,
+        .stTextArea textarea,
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] input {
+            color: #111827 !important;
+            caret-color: #111827 !important;
+        }
+
+        .stTextInput input::placeholder,
+        .stTextArea textarea::placeholder {
+            color: #94A3B8 !important;
+        }
+
+        [data-testid="stFileUploader"] section {
+            background-color: #FFFFFF !important;
+            border: 1px dashed #c9c9c9 !important;
+            color: #111827 !important;
+        }
+
+        [data-testid="stFileUploader"] section * {
+            color: #111827 !important;
+        }
+
+        div.stButton > button:first-child,
+        .stDownloadButton > button,
+        .naver-map-button,
+        [data-testid="stFileUploader"] section button,
+        [data-testid="stFileUploader"] button {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            height: 40px !important;
+            font-size: 13px !important;
+            font-weight: 800 !important;
+            color: #FFFFFF !important;
+            background: #7b7b7b !important;
+            cursor: pointer !important;
+            box-shadow: none !important;
+        }
+
+        div.stButton > button:first-child p,
+        .stDownloadButton > button p,
+        [data-testid="stFileUploader"] section button p,
+        [data-testid="stFileUploader"] button p {
+            color: #FFFFFF !important;
+        }
+
+        div.stButton > button:hover,
+        div.stButton > button:active,
+        div.stButton > button:focus,
+        .stDownloadButton > button:hover,
+        .stDownloadButton > button:active,
+        .stDownloadButton > button:focus,
+        .naver-map-button:hover,
+        .naver-map-button:active,
+        .naver-map-button:focus,
+        [data-testid="stFileUploader"] section button:hover,
+        [data-testid="stFileUploader"] section button:active,
+        [data-testid="stFileUploader"] section button:focus,
+        [data-testid="stFileUploader"] button:hover,
+        [data-testid="stFileUploader"] button:active,
+        [data-testid="stFileUploader"] button:focus {
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+            box-shadow: none !important;
+        }
+
+        .capture-guide,
+        .mini-loading {
+            background: #7b7b7b !important;
+            border-color: #c9c9c9 !important;
+            color: #FFFFFF !important;
+        }
+
+        .capture-guide strong {
+            color: #FFFFFF !important;
+        }
+
+        .mini-spinner {
+            border-color: #CBD5E1 !important;
+            border-top-color: #111827 !important;
+        }
+
+        [data-testid="stTabs"] button {
+            color: #64748B !important;
+        }
+
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            color: #111827 !important;
+        }
+
+        [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+            background-color: #111827 !important;
+        }
+
+        .naver-local-card {
+            border: 1px solid #E5E7EB !important;
+            background: #FFFFFF !important;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+        }
+
+        .naver-local-card-title {
+            color: #111827 !important;
+        }
+
+        .naver-local-card-meta {
+            color: #64748B !important;
+        }
+
+        .naver-local-card-address {
+            color: #1F2937 !important;
+        }
+
+        .stApp,
+        .stApp * {
+            scrollbar-color: #7b7b7b #F1F3F5;
+            scrollbar-width: thin;
+        }
+
+        .stApp *::-webkit-scrollbar,
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2)::-webkit-scrollbar,
+        div[style*="overflow"]::-webkit-scrollbar {
+            width: 9px !important;
+            height: 9px !important;
+        }
+
+        .stApp *::-webkit-scrollbar-thumb,
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2)::-webkit-scrollbar-thumb,
+        div[style*="overflow"]::-webkit-scrollbar-thumb {
+            background: #7b7b7b !important;
+            border-radius: 999px !important;
+            border: 2px solid #F1F3F5 !important;
+        }
+
+        .stApp *::-webkit-scrollbar-thumb:hover,
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2)::-webkit-scrollbar-thumb:hover,
+        div[style*="overflow"]::-webkit-scrollbar-thumb:hover {
+            background: #7b7b7b !important;
+        }
+
+        .stApp *::-webkit-scrollbar-track,
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2)::-webkit-scrollbar-track,
+        div[style*="overflow"]::-webkit-scrollbar-track {
+            background: #F1F3F5 !important;
+            border-radius: 999px !important;
+        }
+
+        /* 화이트 모드에서 남아 있는 검정 버튼/컨트롤류 보정 */
+        button[kind="secondary"],
+        button[kind="primary"],
+        [role="button"]:not([aria-label*="Help"]),
+        [data-testid="baseButton-secondary"],
+        [data-testid="baseButton-primary"] {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            font-size: 13px !important;
+            font-weight: 800 !important;
+            color: #FFFFFF !important;
+            background: #7b7b7b !important;
+            cursor: pointer !important;
+            box-shadow: none !important;
+        }
+
+        button[kind="secondary"]:hover,
+        button[kind="primary"]:hover,
+        [role="button"]:not([aria-label*="Help"]):hover,
+        [data-testid="baseButton-secondary"]:hover,
+        [data-testid="baseButton-primary"]:hover {
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+        }
+
+
+        /* 화이트 모드: 도움말 툴팁/팝오버/드롭다운 메뉴 배경 보정 */
+        [data-testid="stTooltipContent"],
+        [data-testid="stTooltipContent"] *,
+        [data-baseweb="tooltip"],
+        [data-baseweb="tooltip"] *,
+        [role="tooltip"],
+        [role="tooltip"] *,
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] *,
+        div[data-baseweb="menu"],
+        div[data-baseweb="menu"] *,
+        ul[role="listbox"],
+        ul[role="listbox"] *,
+        div[role="listbox"],
+        div[role="listbox"] * {
+            background-color: #7b7b7b !important;
+            color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+        }
+
+        [data-testid="stTooltipContent"],
+        [data-baseweb="tooltip"],
+        [role="tooltip"],
+        div[data-baseweb="popover"],
+        div[data-baseweb="menu"],
+        ul[role="listbox"],
+        div[role="listbox"] {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+
+        li[role="option"],
+        div[role="option"] {
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            font-size: 13px !important;
+            font-weight: 800 !important;
+        }
+
+        li[role="option"]:hover,
+        div[role="option"]:hover,
+        li[aria-selected="true"],
+        div[aria-selected="true"] {
+            background: #6f6f6f !important;
+            color: #FFFFFF !important;
+        }
+
+        /* 화이트 모드: Data editor/DataFrame 영역 보정 */
+        [data-testid="stDataFrame"],
+        [data-testid="stDataFrame"] > div,
+        [data-testid="stDataFrame"] div[role="grid"],
+        [data-testid="stDataFrame"] .glideDataEditor {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+
+        [data-testid="stDataFrame"] *,
+        [data-testid="stDataFrame"] div,
+        [data-testid="stDataFrame"] span,
+        [data-testid="stDataFrame"] p,
+        [data-testid="stDataFrame"] label {
+            border-color: #c9c9c9 !important;
+            color: #FFFFFF !important;
+        }
+
+        [data-testid="stDataFrame"] button,
+        [data-testid="stDataFrame"] [role="button"],
+        [data-testid="stDataFrame"] input,
+        [data-testid="stDataFrame"] textarea {
+            border: 1px solid #c9c9c9 !important;
+            border-radius: 12px !important;
+            min-height: 36px !important;
+            font-size: 13px !important;
+            font-weight: 800 !important;
+            color: #FFFFFF !important;
+            background: #7b7b7b !important;
+            cursor: pointer !important;
+            box-shadow: none !important;
+        }
+
+        [data-testid="stDataFrame"] button:hover,
+        [data-testid="stDataFrame"] [role="button"]:hover,
+        [data-testid="stDataFrame"] input:focus,
+        [data-testid="stDataFrame"] textarea:focus {
+            background: #7b7b7b !important;
+            color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+            box-shadow: none !important;
+        }
+
+        [data-testid="stDataFrame"] canvas {
+            background: #7b7b7b !important;
+            border-radius: 12px !important;
+        }
+
+        /* 화이트 모드: 검정 배경으로 남는 컨트롤류를 회색 톤으로 통일 */
+        .stApp div[style*="background: #111111"],
+        .stApp div[style*="background-color: #111111"],
+        .stApp div[style*="background: rgb(17, 17, 17)"],
+        .stApp div[style*="background-color: rgb(17, 17, 17)"],
+        .stApp div[style*="background: #141414"],
+        .stApp div[style*="background-color: #141414"],
+        .stApp div[style*="background: rgb(20, 20, 20)"],
+        .stApp div[style*="background-color: rgb(20, 20, 20)"] {
+            background: #7b7b7b !important;
+            background-color: #7b7b7b !important;
+            border-color: #c9c9c9 !important;
+            color: #FFFFFF !important;
+        }
+
+        .stApp div[style*="background: #111111"] *,
+        .stApp div[style*="background-color: #111111"] *,
+        .stApp div[style*="background: rgb(17, 17, 17)"] *,
+        .stApp div[style*="background-color: rgb(17, 17, 17)"] *,
+        .stApp div[style*="background: #141414"] *,
+        .stApp div[style*="background-color: #141414"] *,
+        .stApp div[style*="background: rgb(20, 20, 20)"] *,
+        .stApp div[style*="background-color: rgb(20, 20, 20)"] * {
+            color: #FFFFFF !important;
+            border-color: #c9c9c9 !important;
+        }
+
+        hr {
+            border-color: #E5E7EB !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+top_title_col, top_theme_col = st.columns([1.0, 0.24], vertical_alignment="top")
+with top_title_col:
+    st.markdown('<div class="main-title">✉️ 교육 안내문 자동 생성기</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub-title">필수 정보를 입력하면 아웃룩 메일 본문용 HTML과 PNG/JPG 이미지 안내문을 함께 생성합니다.</div>',
+        unsafe_allow_html=True,
+    )
+with top_theme_col:
+    st.markdown('<div class="theme-select-note">화면 테마</div>', unsafe_allow_html=True)
+    st.selectbox(
+        "화면 테마",
+        ["다크 모드", "화이트 모드"],
+        key="app_theme",
+        label_visibility="collapsed",
+        help="작업 화면 테마만 변경합니다. 오른쪽 안내문 결과물은 메일 발송용 흰 배경으로 유지됩니다.",
+    )
 
 
 # -----------------------------
 # 지도 이미지 클립보드 붙여넣기 컴포넌트
 # -----------------------------
 def clipboard_map_paste_component() -> None:
+    is_light_theme = st.session_state.get("app_theme") == "화이트 모드"
+    paste_box_bg = "#7b7b7b" if is_light_theme else "#111111"
+    paste_box_border = "#c9c9c9" if is_light_theme else "#7A7A7A"
+    paste_box_focus = "#c9c9c9" if is_light_theme else "#FFFFFF"
+    paste_box_focus_shadow = "#c9c9c955" if is_light_theme else "#FFFFFF33"
+    paste_box_title = "#FFFFFF" if is_light_theme else "#FFFFFF"
+    paste_box_desc = "#F2F2F2" if is_light_theme else "#B8B8B8"
+    paste_box_status = "#F5F5F5" if is_light_theme else "#D6D6D6"
     components.html(
         """
 <!DOCTYPE html>
@@ -1772,11 +2148,11 @@ def clipboard_map_paste_component() -> None:
 <meta charset="utf-8" />
 <style>
     body { margin: 0; padding: 0; background: transparent; font-family: Arial, sans-serif; }
-    .paste-box { box-sizing: border-box; width: 100%; min-height: 112px; border: 1px dashed #7A7A7A; border-radius: 14px; background: #111111; color: #F7F7F7; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; cursor: text; text-align: center; outline: none; padding: 14px 16px; }
-    .paste-box:focus { border-color: #FFFFFF; box-shadow: 0 0 0 1px #FFFFFF33; }
-    .title { font-size: 14px; font-weight: 850; color: #FFFFFF; }
-    .desc { font-size: 12px; line-height: 18px; color: #B8B8B8; }
-    .status { font-size: 12px; line-height: 18px; color: #D6D6D6; min-height: 18px; }
+    .paste-box { box-sizing: border-box; width: 100%; min-height: 112px; border: 1px dashed __PASTE_BOX_BORDER__; border-radius: 14px; background: __PASTE_BOX_BG__; color: __PASTE_BOX_TITLE__; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; cursor: text; text-align: center; outline: none; padding: 14px 16px; }
+    .paste-box:focus { border-color: __PASTE_BOX_FOCUS__; box-shadow: 0 0 0 1px __PASTE_BOX_FOCUS_SHADOW__; }
+    .title { font-size: 14px; font-weight: 850; color: __PASTE_BOX_TITLE__; }
+    .desc { font-size: 12px; line-height: 18px; color: __PASTE_BOX_DESC__; }
+    .status { font-size: 12px; line-height: 18px; color: __PASTE_BOX_STATUS__; min-height: 18px; }
 </style>
 </head>
 <body>
@@ -1863,7 +2239,14 @@ document.addEventListener('paste', function(event) { if (document.activeElement 
 </script>
 </body>
 </html>
-        """,
+        """
+        .replace("__PASTE_BOX_BG__", paste_box_bg)
+        .replace("__PASTE_BOX_BORDER__", paste_box_border)
+        .replace("__PASTE_BOX_FOCUS__", paste_box_focus)
+        .replace("__PASTE_BOX_FOCUS_SHADOW__", paste_box_focus_shadow)
+        .replace("__PASTE_BOX_TITLE__", paste_box_title)
+        .replace("__PASTE_BOX_DESC__", paste_box_desc)
+        .replace("__PASTE_BOX_STATUS__", paste_box_status),
         height=126,
     )
 
@@ -2408,9 +2791,13 @@ def build_final_mail_html(
 """
 
 
-def build_preview_component_html(final_mail_html: str, preview_scale: float, font_stack: str, export_base_name: str = "education_notice_photo_style") -> str:
+def build_preview_component_html(final_mail_html: str, preview_scale: float, font_stack: str, export_base_name: str = "education_notice_photo_style", app_theme: str = "다크 모드") -> str:
     scale = max(0.45, min(1.0, float(preview_scale)))
     export_base_name_js = json.dumps(str(export_base_name or "education_notice_photo_style"), ensure_ascii=False)
+    is_light_theme = str(app_theme or "") == "화이트 모드"
+    tool_btn_bg = "#7b7b7b" if is_light_theme else "#111111"
+    tool_btn_border = "#c9c9c9" if is_light_theme else "#111111"
+    tool_btn_hover = "#7b7b7b" if is_light_theme else "#333333"
     return (
         f"""
 <!DOCTYPE html>
@@ -2438,16 +2825,16 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             padding-bottom: 8px;
         }}
         .tool-btn {{
-            border: 1px solid #111111;
+            border: 1px solid {tool_btn_border};
             border-radius: 12px;
             height: 40px;
             font-size: 13px;
             font-weight: 800;
             color: #FFFFFF;
-            background: #111111;
+            background: {tool_btn_bg};
             cursor: pointer;
         }}
-        .tool-btn:hover {{ background: #333333; }}
+        .tool-btn:hover {{ background: {tool_btn_hover}; }}
         .note {{
             width: min(760px, calc(100vw - 28px));
             margin: 0 auto 10px auto;
@@ -3035,6 +3422,7 @@ with col_output:
                     preview_scale=preview_scale,
                     font_stack=font_stack,
                     export_base_name=export_file_base,
+                    app_theme=st.session_state.get("app_theme", DEFAULT_VALUES["app_theme"]),
                 ),
                 height=PREVIEW_IFRAME_HEIGHT,
                 scrolling=True,
