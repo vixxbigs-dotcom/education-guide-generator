@@ -1288,6 +1288,31 @@ def sanitize_file_name(value: str) -> str:
     return name or "education_notice_photo_style"
 
 
+def build_download_html_document(final_mail_html: str, font_stack: str, page_title: str = "교육 안내문") -> str:
+    """브라우저에서 HTML 파일을 직접 열어도 한글이 깨지지 않도록 완성형 문서로 감쌉니다."""
+    safe_title = html.escape(str(page_title or "교육 안내문"), quote=False)
+    return f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{safe_title}</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 32px 0;
+            background: #EEF2F6;
+            font-family: {font_stack};
+        }}
+    </style>
+</head>
+<body>
+{final_mail_html}
+</body>
+</html>"""
+
+
 def build_embedded_font_css(font_path: str, font_family: str) -> str:
     path = Path(font_path)
     if not path.exists() or path.suffix.lower() not in FONT_EXTENSIONS:
@@ -2378,7 +2403,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             width: min(760px, calc(100vw - 28px));
             margin: 0 auto 10px auto;
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             position: sticky;
             top: 0;
@@ -2418,6 +2443,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 <body>
     <div class="toolbar">
         <button class="tool-btn" onclick="copyMailContent()">📋 아웃룩 서식 복사</button>
+        <button class="tool-btn" onclick="copyHtmlCode()">🖱️ HTML 코드 복사</button>
         <button class="tool-btn" onclick="downloadImage('png')">🖼️ PNG 저장</button>
         <button class="tool-btn" onclick="downloadImage('jpeg')">🖼️ JPG 저장</button>
     </div>
@@ -2470,6 +2496,41 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
                 alert('사진형 안내문 서식이 복사되었습니다. 아웃룩 본문에 Ctrl+V 하세요.');
             } catch (error) {
                 alert('복사에 실패했습니다. 미리보기 영역을 직접 드래그해서 복사해 주세요.');
+            }
+        }
+
+        async function copyHtmlCode() {
+            const content = getContent();
+            if (!content) {
+                alert('복사할 HTML 코드를 찾지 못했습니다.');
+                return;
+            }
+
+            const htmlCode = content.outerHTML;
+
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(htmlCode);
+                    alert('HTML 코드가 클립보드에 복사되었습니다.');
+                    return;
+                }
+            } catch (error) {
+                console.log(error);
+            }
+
+            try {
+                const textarea = document.createElement('textarea');
+                textarea.value = htmlCode;
+                textarea.setAttribute('readonly', '');
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert('HTML 코드가 클립보드에 복사되었습니다.');
+            } catch (error) {
+                alert('HTML 코드 복사에 실패했습니다. Raw HTML 탭에서 직접 복사해 주세요.');
             }
         }
 
@@ -2813,7 +2874,6 @@ with col_input:
                     f'<a class="naver-map-button" href="{naver_map_url}" target="_blank" rel="noopener noreferrer">🗺️ 네이버 지도</a>',
                     unsafe_allow_html=True,
                 )
-                st.caption("지도에서 원하는 영역을 먼저 확인하세요.")
 
             map_file = st.file_uploader(
                 "지도 이미지 파일 첨부",
@@ -2834,10 +2894,10 @@ with col_input:
                 st.session_state.last_map_capture_message = "붙여넣은 지도 이미지를 적용했습니다."
             pasted_map_data_url = normalize_image_data_url(pasted_map_input)
 
-            with st.expander("느린 자동 캡처(보조 기능)", expanded=False):
+            with st.expander("캡처가 안 될 때(저속 보조 기능)", expanded=False):
                 col_map_cap1, col_map_cap2 = st.columns([1, 1])
                 with col_map_cap1:
-                    if st.button("📸 지도 자동 캡처", use_container_width=True):
+                    if st.button("📸 자동 캡처 실행", use_container_width=True):
                         with st.spinner("네이버 지도 검색 화면을 열고 캡처 중입니다. 환경에 따라 20~40초 정도 걸릴 수 있습니다..."):
                             ok, message = capture_naver_map_region(place_name)
                         st.session_state.last_map_capture_message = message
@@ -2921,6 +2981,13 @@ final_mail_html = build_final_mail_html(
 
 
 export_file_base = sanitize_file_name(st.session_state.get("export_file_name", DEFAULT_VALUES["export_file_name"]))
+download_html_document = build_download_html_document(
+    final_mail_html=final_mail_html,
+    font_stack=font_stack,
+    page_title=export_file_base,
+)
+# Windows 기본 브라우저/일부 편집기에서 한글이 깨지는 것을 줄이기 위해 UTF-8 BOM을 포함합니다.
+download_html_bytes = ("\ufeff" + download_html_document).encode("utf-8")
 
 
 with col_output:
@@ -2964,13 +3031,13 @@ with col_output:
                 with col_d1:
                     st.download_button(
                         label="⬇️ HTML 파일 다운로드",
-                        data=final_mail_html,
+                        data=download_html_bytes,
                         file_name=f"{export_file_base}.html",
-                        mime="text/html",
+                        mime="text/html; charset=utf-8",
                         use_container_width=True,
                     )
                 with col_d2:
-                    st.button("🔄 입력 내용 전체 초기화", on_click=reset_all_fields)
+                    st.button("🔄 입력 내용 전체 초기화", on_click=reset_all_fields, use_container_width=True)
 
         with tab_code:
             st.text_area("생성된 HTML 소스코드 (텍스트 소스 보관용)", value=final_mail_html, height=760)
