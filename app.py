@@ -45,13 +45,13 @@ load_local_env_file_once()
 # 기본 입력값 / 초기화 유틸
 # -----------------------------
 DEFAULT_CURRICULUM = [
-    {"day": "1일차", "time": "10:00 ~ 12:00", "subject": "M1. 팀빌딩과 회고", "speaker": ""},
-    {"day": "1일차", "time": "13:00 ~ 16:00", "subject": "M2. 이전부터 오늘까지 나", "speaker": ""},
-    {"day": "1일차", "time": "16:00 ~ 18:00", "subject": "M3. 내일의 나 (경력 적응성의 관점)", "speaker": ""},
-    {"day": "1일차", "time": "18:00 ~ 19:00", "subject": "석식 만찬", "speaker": ""},
-    {"day": "2일차", "time": "09:00 ~ 12:00", "subject": "M4. HMS/RESPECT", "speaker": "사내강사"},
-    {"day": "2일차", "time": "13:00 ~ 15:00", "subject": "M5. 잡 크래프팅과 일의 의미, 몰입", "speaker": ""},
-    {"day": "2일차", "time": "15:00 ~ 17:00", "subject": "M6. 개인의 목표와 조직의 목표 align", "speaker": ""},
+    {"day": "Day1", "time": "10:00 ~ 12:00", "subject": "M1. 팀빌딩과 회고", "speaker": ""},
+    {"day": "Day1", "time": "13:00 ~ 16:00", "subject": "M2. 이전부터 오늘까지 나", "speaker": ""},
+    {"day": "Day1", "time": "16:00 ~ 18:00", "subject": "M3. 내일의 나 (경력 적응성의 관점)", "speaker": ""},
+    {"day": "Day1", "time": "18:00 ~ 19:00", "subject": "석식 만찬", "speaker": ""},
+    {"day": "Day2", "time": "09:00 ~ 12:00", "subject": "M4. HMS/RESPECT", "speaker": "사내강사"},
+    {"day": "Day2", "time": "13:00 ~ 15:00", "subject": "M5. 잡 크래프팅과 일의 의미, 몰입", "speaker": ""},
+    {"day": "Day2", "time": "15:00 ~ 17:00", "subject": "M6. 개인의 목표와 조직의 목표 align", "speaker": ""},
 ]
 
 DEFAULT_CONTACTS = [
@@ -96,11 +96,12 @@ DEFAULT_VALUES = {
     "naver_local_results": [],
     "naver_local_search_message": "",
     "selected_naver_local_index": -1,
+    "show_curriculum_table": True,
     "curriculum_title": "상세 커리큘럼",
-    "curriculum_columns_text": "시간, 일차, 교육 내용, 강사/비고",
+    "curriculum_columns_text": "Day, 시간, 교육 내용, 강사/비고",
     "curriculum_column_defs": [
+        {"column_name": "Day"},
         {"column_name": "시간"},
-        {"column_name": "일차"},
         {"column_name": "교육 내용"},
         {"column_name": "강사/비고"},
     ],
@@ -133,6 +134,62 @@ def init_defaults() -> None:
         st.session_state.curriculum = [row.copy() for row in DEFAULT_CURRICULUM]
     if "contacts" not in st.session_state:
         st.session_state.contacts = [row.copy() for row in DEFAULT_CONTACTS]
+
+
+def order_curriculum_columns(columns: list[str]) -> list[str]:
+    """시간표 기본 열 순서를 Day → 시간 → 나머지 순서로 정리합니다."""
+    cleaned: list[str] = []
+    for col in columns:
+        clean = str(col or "").strip()
+        if clean == "일차":
+            clean = "Day"
+        if clean and clean not in cleaned:
+            cleaned.append(clean)
+
+    ordered: list[str] = []
+    for priority in ["Day", "시간"]:
+        if priority in cleaned:
+            ordered.append(priority)
+    ordered.extend([col for col in cleaned if col not in ordered])
+    return ordered or ["Day", "시간", "교육 내용", "강사/비고"]
+
+
+def migrate_curriculum_day_defaults() -> None:
+    """기존 세션에 남아 있는 '일차/1일차/2일차' 기본값과 열 순서를 Day 표기로 정리합니다."""
+    column_defs = st.session_state.get("curriculum_column_defs", [])
+    raw_columns = []
+    changed_defs = False
+    for row in to_records(column_defs):
+        col = str(row.get("column_name", "") or "").strip()
+        if col == "일차":
+            col = "Day"
+            changed_defs = True
+        if col:
+            raw_columns.append(col)
+
+    ordered_columns = order_curriculum_columns(raw_columns)
+    if raw_columns and ordered_columns != raw_columns:
+        changed_defs = True
+    if ordered_columns and changed_defs:
+        migrated_defs = [{"column_name": col} for col in ordered_columns]
+        st.session_state.curriculum_column_defs = migrated_defs
+        st.session_state.curriculum_columns_text = ", ".join(ordered_columns)
+
+    curriculum_rows = []
+    changed_rows = False
+    for row in to_records(st.session_state.get("curriculum", [])):
+        new_row = dict(row)
+        for key in ["day", "Day", "일차"]:
+            value = str(new_row.get(key, "") or "").strip()
+            if value == "1일차":
+                new_row[key] = "Day1"
+                changed_rows = True
+            elif value == "2일차":
+                new_row[key] = "Day2"
+                changed_rows = True
+        curriculum_rows.append(new_row)
+    if curriculum_rows and changed_rows:
+        st.session_state.curriculum = curriculum_rows
 
 
 def reset_all_fields() -> None:
@@ -1541,6 +1598,7 @@ def render_template_html(template: str, replacements: dict[str, str]) -> str:
 # Streamlit UI 스타일
 # -----------------------------
 init_defaults()
+migrate_curriculum_day_defaults()
 
 # 화면 테마는 상단 우측 셀렉트박스에서 바꿉니다.
 # CSS는 위젯 렌더링 전 현재 session_state 값을 기준으로 먼저 적용합니다.
@@ -2783,7 +2841,7 @@ def parse_curriculum_columns(columns_text: str) -> list[str]:
         col = part.strip()
         if col and col not in columns:
             columns.append(col)
-    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
+    return columns or ["Day", "시간", "교육 내용", "강사/비고"]
 
 
 
@@ -2795,13 +2853,14 @@ def parse_curriculum_column_defs(column_defs: object) -> list[str]:
         col = str(row.get("column_name", "") or row.get("열 이름", "") or row.get("name", "")).strip()
         if col and col not in columns:
             columns.append(col)
-    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
+    return columns or ["Day", "시간", "교육 내용", "강사/비고"]
 
 
 def _cell_value_by_column(row: dict, column: str) -> str:
     aliases = {
         "시간": ["시간", "time"],
-        "일차": ["일차", "day"],
+        "Day": ["Day", "day", "일차"],
+        "일차": ["일차", "day", "Day"],
         "교육 내용": ["교육 내용", "과정 내용", "subject"],
         "강사/비고": ["강사/비고", "비고", "강사", "speaker"],
     }
@@ -2836,7 +2895,7 @@ def build_curriculum_header(columns: list[str], main_color: str, text_color: str
 
 
 def build_curriculum_rows(curriculum: list[dict], columns: list[str] | None = None) -> str:
-    columns = columns or ["시간", "일차", "교육 내용", "강사/비고"]
+    columns = columns or ["Day", "시간", "교육 내용", "강사/비고"]
     rows = ""
     normalized_records = normalize_curriculum_for_columns(curriculum, columns)
 
@@ -2918,8 +2977,9 @@ def build_final_mail_html(
     edited_contacts: list[dict],
     main_color: str,
     footer_color: str,
-    curriculum_columns_text: str = "시간, 일차, 교육 내용, 강사/비고",
+    curriculum_columns_text: str = "Day, 시간, 교육 내용, 강사/비고",
     curriculum_title: str = "상세 커리큘럼",
+    show_curriculum_table: bool = True,
     section_text_color: str = "#343A40",
     curr_header_text_color: str = "#FFFFFF",
     logo_image_data_url: str = "",
@@ -2944,6 +3004,27 @@ def build_final_mail_html(
         curriculum_title_html = f"""
         <p style="margin: 4px 0 8px 0; font-size: 15px; line-height: 21px; color: #222222; font-weight: 800;">{esc(curriculum_title)}</p>
         """
+    curriculum_block_html = ""
+    if show_curriculum_table:
+        curriculum_block_html = f"""
+        {curriculum_title_html}
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6; background-color: #FFFFFF;">
+            <thead>
+                {curriculum_header_html}
+            </thead>
+            <tbody style="background-color: #FFFFFF;">
+                {curriculum_html}
+            </tbody>
+        </table>
+        """
+    overview_rows = [
+        f"교육명 : {full_course_name}",
+        f"교육일정 : {date_range}  *집합 교육 기준",
+    ]
+    if show_curriculum_table:
+        overview_rows.append("교육시간 : 하기 표 참고  ※ 강의 시작 10분 전까지 입실 부탁드립니다.")
+    else:
+        overview_rows.append("교육시간 : 과정별 안내에 따라 별도 확인 부탁드립니다.")
     info_html = build_bullet_rows(info_text.split("\n"), text_color=section_text_color)
     contacts_html = build_contact_rows(edited_contacts, text_color=section_text_color)
     top_logo_html = build_logo_row(logo_image_data_url, logo_position, "top", logo_max_height)
@@ -3007,22 +3088,10 @@ def build_final_mail_html(
         {build_section_title(1, "교육 개요", main_color, curr_header_text_color, "overview")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="overview" style="width: 100%; border-collapse: collapse; margin: 0 0 18px 0;">
-            {build_bullet_rows([
-                f"교육명 : {full_course_name}",
-                f"교육일정 : {date_range}  *집합 교육 기준",
-                "교육시간 : 하기 표 참고  ※ 강의 시작 10분 전까지 입실 부탁드립니다.",
-            ], text_color=section_text_color)}
+            {build_bullet_rows(overview_rows, text_color=section_text_color)}
         </table>
 
-        {curriculum_title_html}
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6; background-color: #FFFFFF;">
-            <thead>
-                {curriculum_header_html}
-            </thead>
-            <tbody style="background-color: #FFFFFF;">
-                {curriculum_html}
-            </tbody>
-        </table>
+        {curriculum_block_html}
 
         {build_section_title(2, "교육 장소", main_color, curr_header_text_color, "location")}
 
@@ -3276,6 +3345,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 # 쿼리 파라미터 기반 스포이드 색상 반영
 # -----------------------------
 init_defaults()
+migrate_curriculum_day_defaults()
 apply_pending_location_update()
 poll_split_naver_jobs()
 
@@ -3416,7 +3486,14 @@ with col_input:
         # 4. 커리큘럼
         with st.container(border=True):
             st.markdown("#### 커리큘럼")
+            show_curriculum_table = st.checkbox(
+                "교육 시간표 표시",
+                key="show_curriculum_table",
+                help="체크를 해제하면 최종 안내문에서 커리큘럼 표를 표시하지 않습니다.",
+            )
             curriculum_title = st.text_input("커리큘럼 표 이름", key="curriculum_title")
+            if not show_curriculum_table:
+                st.caption("교육 시간표 표시를 해제했습니다. 입력값은 유지되지만 최종 안내문에는 표가 나오지 않습니다.")
 
             with st.expander("표 헤더 편집", expanded=False):
                 if st.session_state.get("app_theme") == "화이트 모드":
@@ -3442,14 +3519,14 @@ with col_input:
                 curriculum_columns = [str(row.get("column_name", "") or "").strip() for row in header_records]
                 curriculum_columns = [col for col in curriculum_columns if col]
                 if not curriculum_columns:
-                    curriculum_columns = ["시간", "일차", "교육 내용", "강사/비고"]
+                    curriculum_columns = ["시간", "Day", "교육 내용", "강사/비고"]
                 st.session_state.curriculum_column_defs = [{"column_name": col} for col in curriculum_columns]
                 st.session_state.curriculum_columns_text = ", ".join(curriculum_columns)
 
             curriculum_columns = [str(row.get("column_name", "") or "").strip() for row in st.session_state.curriculum_column_defs]
             curriculum_columns = [col for col in curriculum_columns if col]
             if not curriculum_columns:
-                curriculum_columns = parse_curriculum_columns(st.session_state.get("curriculum_columns_text", "시간, 일차, 교육 내용, 강사/비고"))
+                curriculum_columns = parse_curriculum_columns(st.session_state.get("curriculum_columns_text", "Day, 시간, 교육 내용, 강사/비고"))
                 st.session_state.curriculum_column_defs = [{"column_name": col} for col in curriculum_columns]
             curriculum_columns_text = ", ".join(curriculum_columns)
 
@@ -3673,6 +3750,7 @@ final_mail_html = build_final_mail_html(
     edited_curriculum=edited_curr,
     curriculum_columns_text=curriculum_columns_text,
     curriculum_title=curriculum_title,
+    show_curriculum_table=show_curriculum_table,
     info_text=info_text,
     edited_contacts=edited_contacts,
     main_color=main_color,
