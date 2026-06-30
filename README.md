@@ -1,5 +1,8 @@
-# ✉️ 교육 안내문 자동 생성기
-https://education-guide-generator-hqc7rk2uxappau4bettiix8.streamlit.app/
+🌍 Live Demo
+🔗 [https://vixxbigs-dotcom.github.io/newsletter-automation/](https://education-guide-generator-hqc7rk2uxappau4bettiix8.streamlit.app/)✉️ 교육 안내문 생성 도구
+
+## ✉️ 교육 안내문 생성 도구
+
 ### Education Guide Generator
 
 > Streamlit 기반 교육 안내문 자동 생성 도구
