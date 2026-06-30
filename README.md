@@ -6,8 +6,7 @@
 > 반복적으로 작성하던 교육 안내 메일을 **HTML, PNG, JPG 형태로 빠르게 생성**할 수 있도록 만든 업무 자동화 프로젝트입니다.
 > 
 <img width="2638" height="1484" alt="image" src="https://github.com/user-attachments/assets/64cb9f2e-c282-4f92-8155-2b676ff080f1" />
-<img width="2638" height="1484" alt="image" src="https://github.com/user-attachments/assets/b3d6d7fb-159e-443b-b48f-d22aeea0144b" />
-
+<img width="2638" height="1484" alt="image" src="https://github.com/user-attachments/assets/e52b0f2d-7283-40b1-a685-d49c65adbfbe" />
 
 ---
 
