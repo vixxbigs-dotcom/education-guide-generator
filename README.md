@@ -5,8 +5,8 @@
 > Streamlit 기반 교육 안내문 자동 생성 도구
 > 반복적으로 작성하던 교육 안내 메일을 **HTML, PNG, JPG 형태로 빠르게 생성**할 수 있도록 만든 업무 자동화 프로젝트입니다.
 > 
-<img width="2638" height="1484" alt="image" src="https://github.com/user-attachments/assets/64cb9f2e-c282-4f92-8155-2b676ff080f1" />
-<img width="2638" height="1484" alt="image" src="https://github.com/user-attachments/assets/e52b0f2d-7283-40b1-a685-d49c65adbfbe" />
+<img width="4000" height="2250" alt="교육안내 문설명_pages-to-jpg-0006" src="https://github.com/user-attachments/assets/1b9d13a7-db9d-4842-acbd-5f9d64023a8d" />
+<img width="4000" height="2250" alt="교육안내 문설명_pages-to-jpg-0008" src="https://github.com/user-attachments/assets/d0c59f40-d147-4aa8-abbe-17d303dcd1e9" />
 
 ---
 
