@@ -4,41 +4,15 @@ import io
 import json
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 
 st.set_page_config(page_title="교육 안내문 자동 생성기", page_icon="✉️", layout="wide")
-
-
-def load_local_env_file_once() -> None:
-    """python-dotenv 없이 프로젝트 루트의 .env 값을 환경변수로 읽어옵니다."""
-    import os
-    env_path = Path.cwd() / ".env"
-    if not env_path.exists():
-        return
-    try:
-        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-    except Exception:
-        pass
-
-
-load_local_env_file_once()
 
 
 # -----------------------------
@@ -81,43 +55,18 @@ DEFAULT_VALUES = {
     "day1_time": "10",
     "day2_time": "9",
     "place_name": "스타필드 수원 타임체임버",
-    "road_address": "",
-    "display_place_name": "스타필드 수원 타임체임버",
-    "display_road_address": "",
-    "display_location_text": "스타필드 수원 타임체임버",
-    "last_address_fetch_message": "",
-    "selected_map_capture_variant": "일반 크기 (1200×960)",
-    "naver_background_message": "",
-    "naver_map_background_message": "",
-    "naver_address_background_message": "",
-    "naver_client_id_input": "",
-    "naver_client_secret_input": "",
-    "naver_local_results": [],
-    "naver_local_search_message": "",
-    "selected_naver_local_index": -1,
-    "curriculum_title": "상세 커리큘럼",
-    "curriculum_columns_text": "시간, 일차, 교육 내용, 강사/비고",
-    "curriculum_column_defs": [
-        {"column_name": "시간"},
-        {"column_name": "일차"},
-        {"column_name": "교육 내용"},
-        {"column_name": "강사/비고"},
-    ],
     "info_text": "- 숙소는 2인 1실로 제공될 예정이며 생수, 비누, 샴푸, 헤어드라이기, 냉장고, TV, 전화기, 비데, 유무선인터넷 등이 구비되어 있습니다.\n- 1일차 석식은 연수원 외부에서 진행될 예정이오니 참고 부탁드립니다.",
     "preview_scale_percent": 72,
     "export_file_name": "education_notice_photo_style",
     "captured_map_data_url": "",
     "captured_map_file_path": "",
-    "captured_map_files": {},
     "last_map_capture_message": "",
-    "pending_location_update": None,
 }
 
 WIDGET_KEYS_TO_CLEAR_ON_RESET = [
     "logo_file_uploader",
     "map_file_uploader",
     "curr_editor",
-    "curriculum_column_defs_editor",
     "contacts_editor",
     "font_folder_select",
 ]
@@ -142,14 +91,7 @@ def reset_all_fields() -> None:
         st.session_state.pop(key, None)
     st.session_state.pop("last_captured_map_file", None)
     st.session_state.pop("captured_map_file_path", None)
-    st.session_state.pop("captured_map_files", None)
     st.session_state.pop("last_map_capture_message", None)
-    st.session_state.pop("naver_combined_future", None)
-    st.session_state.pop("naver_combined_started_at", None)
-    st.session_state.pop("naver_map_future", None)
-    st.session_state.pop("naver_map_started_at", None)
-    st.session_state.pop("naver_address_future", None)
-    st.session_state.pop("naver_address_started_at", None)
     st.cache_data.clear()
     st.cache_resource.clear()
 
@@ -218,177 +160,6 @@ def file_path_to_data_url(file_path: str) -> str:
         mime_type = "image/webp"
     return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
-
-
-def strip_html_tags(value: str) -> str:
-    """네이버 지역 검색 API title에 섞이는 <b> 태그 등을 제거합니다."""
-    text = re.sub(r"<[^>]+>", "", str(value or ""))
-    return html.unescape(text).strip()
-
-
-def normalize_naver_coord(value: object) -> float | None:
-    """네이버 지역 검색 API의 mapx/mapy 정수 좌표를 경도/위도 실수로 변환합니다."""
-    try:
-        number = float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    # 지역 검색 API는 WGS84 기준 정수형 좌표를 반환합니다. 보통 1e7로 나누면 경도/위도가 됩니다.
-    if abs(number) > 1000:
-        number = number / 10_000_000
-    return number
-
-
-def get_naver_local_api_credentials() -> tuple[str, str]:
-    """.env/환경변수 > st.secrets 순서로 네이버 검색 API 키를 가져옵니다.
-
-    최종 사용자는 API 키를 화면에 입력하지 않도록, 기본값은 프로젝트 루트의
-    .env 파일 또는 실행 환경변수에서 읽습니다.
-    """
-    try:
-        import os
-        env_id = os.getenv("NAVER_CLIENT_ID", "").strip()
-        env_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
-        if env_id and env_secret:
-            return env_id, env_secret
-    except Exception:
-        pass
-
-    try:
-        secret_id = str(st.secrets.get("NAVER_CLIENT_ID", "") or "").strip()
-        secret_secret = str(st.secrets.get("NAVER_CLIENT_SECRET", "") or "").strip()
-        if secret_id and secret_secret:
-            return secret_id, secret_secret
-    except Exception:
-        pass
-
-    return "", ""
-
-
-def has_naver_local_api_credentials() -> bool:
-    client_id, client_secret = get_naver_local_api_credentials()
-    return bool(client_id and client_secret)
-
-
-def queue_location_update(title: str = "", address: str = "", message: str = "") -> None:
-    """위젯 생성 이후에는 key 값을 직접 바꾸지 않고, 다음 rerun 초기에 반영하도록 임시 저장합니다."""
-    st.session_state.pending_location_update = {
-        "title": str(title or "").strip(),
-        "address": str(address or "").strip(),
-        "message": str(message or "").strip(),
-    }
-
-
-def apply_pending_location_update() -> None:
-    pending = st.session_state.get("pending_location_update")
-    if not pending:
-        return
-    title = str((pending or {}).get("title", "") or "").strip()
-    address = str((pending or {}).get("address", "") or "").strip()
-    message = str((pending or {}).get("message", "") or "").strip()
-    if title:
-        st.session_state.place_name = title
-    if address:
-        st.session_state.road_address = address
-    if title or address:
-        st.session_state.display_location_text = format_location_line(title, address)
-    if message:
-        st.session_state.last_address_fetch_message = message
-    st.session_state.pending_location_update = None
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def search_naver_local_api(query: str, client_id: str, client_secret: str, display: int = 5) -> dict:
-    """네이버 Developers 검색 > 지역 API로 장소 후보를 가져옵니다."""
-    query = str(query or "").strip()
-    if not query:
-        return {"ok": False, "message": "검색어를 입력해 주세요.", "items": []}
-    if not client_id or not client_secret:
-        return {"ok": False, "message": "장소 검색 설정을 확인해 주세요.", "items": []}
-
-    params = urlencode({"query": query, "display": max(1, min(int(display or 5), 5)), "start": 1, "sort": "random"})
-    api_url = f"https://openapi.naver.com/v1/search/local.json?{params}"
-    req = Request(
-        api_url,
-        headers={
-            "X-Naver-Client-Id": client_id,
-            "X-Naver-Client-Secret": client_secret,
-            "User-Agent": "education-notice-generator/1.0",
-        },
-        method="GET",
-    )
-
-    try:
-        with urlopen(req, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8")[:500]
-        except Exception:
-            detail = ""
-        return {"ok": False, "message": f"네이버 지역 검색 API 오류: HTTP {exc.code} {detail}", "items": []}
-    except URLError as exc:
-        return {"ok": False, "message": f"네이버 지역 검색 API 연결 실패: {exc}", "items": []}
-    except Exception as exc:
-        return {"ok": False, "message": f"네이버 지역 검색 API 처리 실패: {exc}", "items": []}
-
-    items = []
-    for raw in payload.get("items", []) or []:
-        title = strip_html_tags(raw.get("title", ""))
-        road = strip_html_tags(raw.get("roadAddress", ""))
-        addr = strip_html_tags(raw.get("address", ""))
-        category = strip_html_tags(raw.get("category", ""))
-        link = str(raw.get("link", "") or "").strip()
-        lon = normalize_naver_coord(raw.get("mapx"))
-        lat = normalize_naver_coord(raw.get("mapy"))
-        items.append({
-            "title": title,
-            "category": category,
-            "roadAddress": road,
-            "address": addr,
-            "mapx": raw.get("mapx", ""),
-            "mapy": raw.get("mapy", ""),
-            "lon": lon,
-            "lat": lat,
-            "link": link,
-        })
-    return {"ok": True, "message": f"검색 결과 {len(items)}건을 가져왔습니다.", "items": items}
-
-
-def apply_naver_local_item(item: dict) -> None:
-    """검색 결과 카드에서 선택한 장소를 다음 rerun 때 안전하게 반영합니다."""
-    title = strip_html_tags(item.get("title", ""))
-    road = strip_html_tags(item.get("roadAddress", ""))
-    addr = strip_html_tags(item.get("address", ""))
-    chosen_address = road or addr
-    queue_location_update(title, chosen_address, "선택한 장소를 안내문에 반영했습니다.")
-    st.session_state.naver_local_search_message = ""
-
-
-def apply_first_naver_local_result() -> None:
-    """검색어 기준 첫 번째 장소 후보를 안내문 장소/주소에 반영합니다."""
-    query = str(st.session_state.get("place_name", "") or "").strip()
-    api_id, api_secret = get_naver_local_api_credentials()
-    result = search_naver_local_api(query, api_id, api_secret, 5)
-    items = result.get("items", []) or []
-    st.session_state.naver_local_results = items
-    if items:
-        first_item = items[0]
-        title = strip_html_tags(first_item.get("title", "")) or query
-        road = strip_html_tags(first_item.get("roadAddress", ""))
-        addr = strip_html_tags(first_item.get("address", ""))
-        chosen_address = road or addr
-        queue_location_update(title, chosen_address, "주소를 자동 입력했습니다.")
-        st.session_state.naver_local_search_message = ""
-    else:
-        st.session_state.last_address_fetch_message = result.get("message", "장소 후보를 찾지 못했습니다.")
-        st.session_state.naver_local_search_message = result.get("message", "")
-
-
-def naver_item_map_link(item: dict, fallback_query: str) -> str:
-    """선택 후보를 네이버 지도에서 열기 위한 링크를 만듭니다."""
-    title = item.get("title") or fallback_query
-    query = quote(str(title or "").strip())
-    return f"https://map.naver.com/p/search/{query}?c=16.00,0,0,0,dh"
 
 def capture_naver_map_region(place_query: str, wait_seconds: float = 8.0) -> tuple[bool, str]:
     """
@@ -503,708 +274,6 @@ def capture_naver_map_region(place_query: str, wait_seconds: float = 8.0) -> tup
         )
 
 
-
-def _find_text_in_all_frames(page, selector: str, timeout_ms: int = 2500) -> str:
-    """현재 페이지와 모든 iframe에서 selector의 첫 번째 텍스트를 찾습니다."""
-    for frame in page.frames:
-        try:
-            locator = frame.locator(selector).first
-            if locator.count() > 0:
-                text = locator.inner_text(timeout=timeout_ms).strip()
-                if text:
-                    return text
-        except Exception:
-            continue
-    return ""
-
-
-def _wait_for_frame_by_name(page, frame_name: str, timeout_ms: int = 18000):
-    """네이버 지도 iframe은 늦게 붙는 경우가 많아서 이름 기준으로 반복 탐색합니다."""
-    deadline = time.time() + (timeout_ms / 1000)
-    while time.time() < deadline:
-        try:
-            frame = page.frame(name=frame_name)
-            if frame:
-                return frame
-        except Exception:
-            pass
-        try:
-            page.wait_for_timeout(250)
-        except Exception:
-            time.sleep(0.25)
-    return None
-
-
-def _extract_korean_road_address(text: str) -> str:
-    """네이버 지도 상세/검색 결과 텍스트에서 도로명 주소처럼 보이는 한 줄을 추출합니다."""
-    raw = str(text or "")
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    province_pattern = r"(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)"
-    road_pattern = re.compile(province_pattern + r"[^\n]{0,90}?(?:로|길)\s*\d+(?:[\-\d]*)?(?:\s*[^\n]{0,45})?")
-    for line in lines:
-        if any(token in line for token in ["복사", "전화", "영업", "리뷰", "사진", "거리뷰", "출발", "도착"]):
-            continue
-        match = road_pattern.search(line)
-        if match:
-            address = match.group(0).strip()
-            address = re.sub(r"\s+", " ", address)
-            return address
-    match = road_pattern.search(raw)
-    if match:
-        return re.sub(r"\s+", " ", match.group(0).strip())
-    return ""
-
-
-def _try_click_locator(locator, timeout_ms: int = 7000) -> bool:
-    """React 이벤트 기반 href='#' 버튼 클릭을 여러 방식으로 시도합니다."""
-    try:
-        locator.wait_for(state="visible", timeout=timeout_ms)
-    except Exception:
-        return False
-
-    try:
-        locator.scroll_into_view_if_needed(timeout=timeout_ms)
-    except Exception:
-        pass
-
-    click_methods = [
-        lambda: locator.click(timeout=timeout_ms),
-        lambda: locator.click(timeout=timeout_ms, force=True),
-        lambda: locator.dispatch_event("click", timeout=timeout_ms),
-        lambda: locator.evaluate("el => el.click()", timeout=timeout_ms),
-        lambda: locator.press("Enter", timeout=timeout_ms),
-    ]
-    for method in click_methods:
-        try:
-            method()
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _click_first_naver_place_result(page) -> tuple[bool, str]:
-    """
-    네이버 지도 검색 결과 첫 번째 항목을 클릭합니다.
-    검색 결과의 a 태그 href는 대부분 '#': 실제 상세 이동은 React click handler로 처리됩니다.
-    그래서 href를 읽지 않고, 제목/썸네일/role=button 요소를 실제 클릭합니다.
-    """
-    search_frame = _wait_for_frame_by_name(page, "searchIframe", timeout_ms=22000)
-    candidate_frames = []
-    if search_frame:
-        candidate_frames.append(search_frame)
-    candidate_frames.extend([frame for frame in page.frames if frame not in candidate_frames])
-
-    selectors = [
-        "#_pcmap_list_scroll_container > ul > li:nth-child(1) a.U70Fj",
-        "#_pcmap_list_scroll_container > ul > li:nth-child(1) a.place_thumb",
-        "#_pcmap_list_scroll_container > ul > li:nth-child(1) a[role='button']",
-        "#_pcmap_list_scroll_container > ul > li:nth-child(1) [role='button']",
-        "li.VLTHu:nth-child(1) a.U70Fj",
-        "li.VLTHu:nth-child(1) a.place_thumb",
-        "li:nth-child(1) a.U70Fj",
-        "li:nth-child(1) a.place_thumb",
-        "li:nth-child(1) [role='button']",
-        "a.U70Fj:has(span.YwYLL)",
-        "span.YwYLL",
-    ]
-
-    last_error = ""
-    for frame in candidate_frames:
-        for selector in selectors:
-            try:
-                locator = frame.locator(selector).first
-                if locator.count() <= 0:
-                    continue
-                if _try_click_locator(locator):
-                    return True, f"첫 번째 검색 결과를 클릭했습니다. selector={selector}"
-            except Exception as exc:
-                last_error = str(exc)
-                continue
-
-    # 최후 fallback: DOM 좌표로 첫 번째 결과 제목 위치를 클릭합니다.
-    # searchIframe 안의 locator bounding_box는 메인 페이지 좌표로 변환되어 반환됩니다.
-    try:
-        if search_frame:
-            locator = search_frame.locator("#_pcmap_list_scroll_container > ul > li:nth-child(1)").first
-            locator.wait_for(state="visible", timeout=5000)
-            box = locator.bounding_box(timeout=5000)
-            if box:
-                page.mouse.click(box["x"] + min(160, box["width"] / 2), box["y"] + min(42, box["height"] / 2))
-                return True, "첫 번째 검색 결과를 좌표 클릭했습니다."
-    except Exception as exc:
-        last_error = str(exc)
-
-    return False, f"첫 번째 검색 결과 클릭에 실패했습니다. {last_error}".strip()
-
-
-def _extract_road_address_from_loaded_naver(page) -> str:
-    """entryIframe 우선, 이후 전체 iframe에서 주소를 찾습니다."""
-    target_frames = []
-    entry_frame = _wait_for_frame_by_name(page, "entryIframe", timeout_ms=18000)
-    if entry_frame:
-        target_frames.append(entry_frame)
-    target_frames.extend([frame for frame in page.frames if frame not in target_frames])
-
-    selectors = [
-        "#app-root div.place_section_content div.O8qbU.tQY7D div a span.pz7wy",
-        "#app-root span.pz7wy",
-        "span.pz7wy",
-        "a span.pz7wy",
-        "[class*='O8qbU'] [class*='pz7wy']",
-    ]
-
-    for _ in range(10):
-        for frame in target_frames:
-            for selector in selectors:
-                try:
-                    locator = frame.locator(selector).first
-                    if locator.count() <= 0:
-                        continue
-                    text = locator.inner_text(timeout=1500).strip()
-                    address = _extract_korean_road_address(text) or text
-                    if address and ("로" in address or "길" in address):
-                        return re.sub(r"\s+", " ", address.strip())
-                except Exception:
-                    continue
-        try:
-            page.wait_for_timeout(700)
-        except Exception:
-            time.sleep(0.7)
-
-    for frame in target_frames:
-        try:
-            body_text = frame.locator("body").inner_text(timeout=2500)
-            address = _extract_korean_road_address(body_text)
-            if address:
-                return address
-        except Exception:
-            continue
-
-    return ""
-
-
-def fetch_naver_road_address(place_query: str, wait_seconds: float = 5.0) -> tuple[bool, str]:
-    """
-    네이버 지도 검색 결과의 첫 번째 장소 상세 페이지에서 도로명 주소를 가져옵니다.
-    v25 변경점:
-    - href='#'를 링크로 해석하지 않고 실제 React click handler를 실행합니다.
-    - 썸네일보다 제목 링크(a.U70Fj)를 우선 클릭합니다.
-    - searchIframe/entryIframe 로딩을 더 오래 기다립니다.
-    - 실패 시 디버그용 스크린샷/HTML을 assets/captures에 저장합니다.
-    """
-    query = str(place_query or "").strip()
-    if not query:
-        return False, "교육 장소명을 먼저 입력해 주세요."
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        return False, "도로명 주소 가져오기에는 Playwright가 필요합니다. `python -m pip install playwright` 및 `python -m playwright install chromium`을 실행해 주세요."
-
-    map_url = f"https://map.naver.com/p/search/{quote(query)}?c=16.00,0,0,0,dh"
-    debug_dir = get_captures_dir()
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--window-size=1920,1080",
-                    "--force-device-scale-factor=1",
-                    "--hide-scrollbars",
-                    "--disable-gpu",
-                ],
-            )
-            context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                screen={"width": 1920, "height": 1080},
-                device_scale_factor=1,
-                locale="ko-KR",
-                timezone_id="Asia/Seoul",
-                ignore_https_errors=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = context.new_page()
-            page.goto(map_url, wait_until="domcontentloaded", timeout=70000)
-            page.wait_for_timeout(int(max(3.0, float(wait_seconds)) * 1000))
-
-            clicked, click_message = _click_first_naver_place_result(page)
-            if not clicked:
-                try:
-                    page.screenshot(path=str(debug_dir / f"address_click_failed_{stamp}.png"), full_page=True)
-                except Exception:
-                    pass
-                try:
-                    (debug_dir / f"address_click_failed_{stamp}.html").write_text(page.content(), encoding="utf-8")
-                except Exception:
-                    pass
-                browser.close()
-                return False, click_message
-
-            # entryIframe이 붙고 상세 DOM이 그려질 시간을 줍니다.
-            page.wait_for_timeout(2500)
-            address = _extract_road_address_from_loaded_naver(page)
-
-            if not address:
-                try:
-                    page.screenshot(path=str(debug_dir / f"address_extract_failed_{stamp}.png"), full_page=True)
-                except Exception:
-                    pass
-                try:
-                    frames_dump = []
-                    for frame in page.frames:
-                        frame_name = getattr(frame, "name", "") or "no_name"
-                        frame_url = getattr(frame, "url", "") or ""
-                        try:
-                            frame_text = frame.locator("body").inner_text(timeout=1000)[:4000]
-                        except Exception:
-                            frame_text = ""
-                        frames_dump.append(f"\n--- FRAME: {frame_name} ---\nURL: {frame_url}\n{frame_text}")
-                    (debug_dir / f"address_extract_failed_{stamp}.txt").write_text("\n".join(frames_dump), encoding="utf-8")
-                except Exception:
-                    pass
-
-            browser.close()
-
-        if address:
-            return True, address.strip()
-        return False, (
-            "첫 번째 검색 결과 상세 화면까지는 클릭했지만 도로명 주소를 찾지 못했습니다. "
-            "assets/captures 폴더의 address_extract_failed 파일을 확인해 주세요."
-        )
-    except Exception as exc:
-        return False, f"도로명 주소 가져오기에 실패했습니다. 상세: {exc}"
-
-
-def fetch_road_address_callback() -> None:
-    ok, result = fetch_naver_road_address(st.session_state.get("place_name", ""))
-    if ok:
-        st.session_state.road_address = result
-        # 가져온 주소는 검색용 주소 필드와 안내문 표시 주소 필드에 같이 넣어줍니다.
-        # 이후 사용자가 안내문 표시 주소만 별도로 수정할 수 있습니다.
-        st.session_state.display_road_address = result
-        place_for_display = str(st.session_state.get("place_name", "") or "").strip()
-        if not str(st.session_state.get("display_place_name", "")).strip():
-            st.session_state.display_place_name = place_for_display
-        if place_for_display:
-            st.session_state.display_location_text = f"{place_for_display}  ({result})"
-        else:
-            st.session_state.display_location_text = result
-        st.session_state.last_address_fetch_message = f"도로명 주소를 가져왔습니다: {result}"
-    else:
-        st.session_state.last_address_fetch_message = result
-
-
-
-def capture_naver_map_variants(place_query: str, wait_seconds: float = 0.8) -> dict:
-    """
-    빠른 지도 캡처 전용 경로입니다.
-    - 주소 추출은 하지 않습니다.
-    - 네이버 지도 페이지를 한 번만 열고 viewport 한 장만 캡처합니다.
-    - 두 크기 이미지는 같은 원본 스크린샷에서 crop 합니다.
-    - 대기 시간은 짧게 두고, 실패하면 빠르게 종료합니다.
-    """
-    query = str(place_query or "").strip()
-    if not query:
-        return {"ok": False, "message": "교육 장소명 / 검색어를 먼저 입력해 주세요.", "map_file_paths": {}}
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        return {"ok": False, "message": "지도 캡처에는 Playwright가 필요합니다. `python -m pip install playwright` 및 `python -m playwright install chromium`을 실행해 주세요.", "map_file_paths": {}}
-
-    try:
-        from PIL import Image, ImageStat
-    except Exception:
-        return {"ok": False, "message": "지도 이미지를 자르려면 Pillow가 필요합니다. `python -m pip install pillow`를 실행해 주세요.", "map_file_paths": {}}
-
-    map_url = f"https://map.naver.com/p/search/{quote(query)}?c=16.00,0,0,0,dh"
-    crop_boxes = get_capture_boxes()
-    captures_dir = get_captures_dir()
-    captures_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--window-size=1920,1080",
-                    "--force-device-scale-factor=1",
-                    "--hide-scrollbars",
-                    "--disable-gpu",
-                ],
-            )
-            context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                screen={"width": 1920, "height": 1080},
-                device_scale_factor=1,
-                locale="ko-KR",
-                timezone_id="Asia/Seoul",
-                ignore_https_errors=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = context.new_page()
-            page.goto(map_url, wait_until="domcontentloaded", timeout=15000)
-            try:
-                page.wait_for_selector("iframe#searchIframe, canvas, [class*=map], [class*=Map], img", timeout=3500)
-            except Exception:
-                pass
-            page.wait_for_timeout(int(max(0.4, float(wait_seconds)) * 1000))
-            screenshot_bytes = page.screenshot(type="png", full_page=False, animations="disabled")
-            browser.close()
-
-        image = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
-        width, height = image.size
-        map_file_paths = {}
-        blank_notes = []
-
-        for variant_name, crop_box in crop_boxes.items():
-            left, top, right, bottom = crop_box
-            if width < right or height < bottom:
-                continue
-            cropped = image.crop(crop_box)
-            stat = ImageStat.Stat(cropped.resize((120, 96)))
-            avg_stddev = sum(stat.stddev) / len(stat.stddev)
-            safe_name = "small" if "작은" in variant_name else "normal"
-            file_path = captures_dir / f"naver_map_capture_{safe_name}_{stamp}.png"
-            cropped.save(file_path, format="PNG")
-            map_file_paths[variant_name] = str(file_path)
-            if avg_stddev < 2.5:
-                blank_notes.append(variant_name)
-
-        if not map_file_paths:
-            return {"ok": False, "message": f"지도 캡처 화면 크기가 예상보다 작습니다. 현재 {width}x{height}입니다.", "map_file_paths": {}}
-
-        message = "지도 이미지를 가져왔습니다."
-        if blank_notes:
-            message += " 일부 캡처가 단색에 가깝습니다. 필요하면 직접 첨부 이미지를 사용해 주세요."
-        return {"ok": True, "message": message, "map_file_paths": map_file_paths}
-    except Exception as exc:
-        return {"ok": False, "message": f"지도 이미지 가져오기에 실패했습니다. 상세: {exc}", "map_file_paths": {}}
-
-
-def fetch_naver_road_address_result(place_query: str, wait_seconds: float = 2.5) -> dict:
-    """주소만 별도로 가져옵니다. 실패해도 지도 캡처에는 영향을 주지 않도록 dict로 반환합니다."""
-    ok, result = fetch_naver_road_address(place_query, wait_seconds=wait_seconds)
-    if ok:
-        query = str(place_query or "").strip()
-        return {
-            "ok": True,
-            "road_address": result.strip(),
-            "display_location_text": format_location_line(query, result),
-            "message": f"도로명 주소를 가져왔습니다: {result.strip()}",
-        }
-    return {"ok": False, "road_address": "", "display_location_text": "", "message": result}
-
-
-def start_naver_map_background_job() -> None:
-    query = str(st.session_state.get("place_name", "") or "").strip()
-    if not query:
-        st.session_state.naver_map_background_message = "교육 장소명 / 검색어를 먼저 입력해 주세요."
-        return
-    future = st.session_state.get("naver_map_future")
-    if future is not None and not future.done():
-        st.session_state.naver_map_background_message = "이미 지도 이미지 가져오기가 실행 중입니다. 잠시 후 결과를 확인해 주세요."
-        return
-    executor = get_naver_executor()
-    st.session_state.naver_map_future = executor.submit(capture_naver_map_variants, query, 0.8)
-    st.session_state.naver_map_started_at = time.time()
-    st.session_state.naver_map_background_message = "지도 이미지를 가져오는 중입니다."
-
-
-def start_naver_address_background_job() -> None:
-    query = str(st.session_state.get("place_name", "") or "").strip()
-    if not query:
-        st.session_state.naver_address_background_message = "교육 장소명 / 검색어를 먼저 입력해 주세요."
-        return
-    future = st.session_state.get("naver_address_future")
-    if future is not None and not future.done():
-        st.session_state.naver_address_background_message = "이미 도로명 주소 가져오기가 실행 중입니다. 잠시 후 결과를 확인해 주세요."
-        return
-    executor = get_naver_executor()
-    st.session_state.naver_address_future = executor.submit(fetch_naver_road_address_result, query, 2.5)
-    st.session_state.naver_address_started_at = time.time()
-    st.session_state.naver_address_background_message = "도로명 주소 가져오기를 백그라운드에서 시작했습니다. 다른 입력 작업을 계속할 수 있습니다."
-
-
-def poll_split_naver_jobs() -> None:
-    map_future = st.session_state.get("naver_map_future")
-    if map_future is not None:
-        if not map_future.done():
-            started = st.session_state.get("naver_map_started_at", time.time())
-            elapsed = int(time.time() - started)
-            st.session_state.naver_map_background_message = f"지도 이미지 가져오는 중... {elapsed}초"
-        else:
-            try:
-                result = map_future.result()
-            except Exception as exc:
-                result = {"ok": False, "message": f"지도 이미지 백그라운드 작업 오류: {exc}", "map_file_paths": {}}
-            st.session_state.pop("naver_map_future", None)
-            if result.get("map_file_paths"):
-                st.session_state.captured_map_files = result["map_file_paths"]
-                selected = st.session_state.get("selected_map_capture_variant", "일반 크기 (1200×960)")
-                chosen_path = result["map_file_paths"].get(selected) or result["map_file_paths"].get("일반 크기 (1200×960)") or next(iter(result["map_file_paths"].values()))
-                st.session_state.captured_map_file_path = chosen_path
-                st.session_state.captured_map_data_url = ""
-                st.session_state.last_captured_map_file = chosen_path
-                st.session_state.last_map_capture_message = "지도 이미지를 가져왔습니다. 아래에서 사용할 크기를 선택해 주세요."
-            st.session_state.naver_map_background_message = result.get("message", "지도 이미지 작업이 완료되었습니다.")
-
-    address_future = st.session_state.get("naver_address_future")
-    if address_future is not None:
-        if not address_future.done():
-            started = st.session_state.get("naver_address_started_at", time.time())
-            elapsed = int(time.time() - started)
-            st.session_state.naver_address_background_message = f"도로명 주소 가져오는 중... 약 {elapsed}초 경과."
-        else:
-            try:
-                result = address_future.result()
-            except Exception as exc:
-                result = {"ok": False, "message": f"도로명 주소 백그라운드 작업 오류: {exc}", "road_address": "", "display_location_text": ""}
-            st.session_state.pop("naver_address_future", None)
-            if result.get("road_address"):
-                st.session_state.road_address = result["road_address"]
-                st.session_state.last_address_fetch_message = f"도로명 주소를 가져왔습니다: {result['road_address']}"
-            if result.get("display_location_text"):
-                st.session_state.display_location_text = result["display_location_text"]
-            st.session_state.naver_address_background_message = result.get("message", "도로명 주소 작업이 완료되었습니다.")
-
-
-@st.cache_resource
-def get_naver_executor() -> ThreadPoolExecutor:
-    """네이버 지도/주소 자동화 작업을 백그라운드에서 실행합니다."""
-    return ThreadPoolExecutor(max_workers=2)
-
-
-def get_capture_boxes() -> dict[str, tuple[int, int, int, int]]:
-    return {
-        "작은 크기 (1000×800)": (685, 167, 1685, 967),
-        "일반 크기 (1200×960)": (585, 87, 1785, 87 + 960),
-    }
-
-
-def format_location_line(place: str, address: str) -> str:
-    clean_place = str(place or "").strip()
-    clean_address = str(address or "").strip()
-    if clean_place and clean_address:
-        return f"{clean_place}  ({clean_address})"
-    return clean_place or clean_address
-
-
-def capture_naver_map_and_address(place_query: str, wait_seconds: float = 3.0) -> dict:
-    """
-    네이버 지도 검색 URL을 한 번만 열어서 지도 이미지 2종(작은/일반)을 먼저 캡처하고,
-    그 다음 첫 번째 결과를 클릭해 도로명 주소를 가져옵니다.
-    """
-    query = str(place_query or "").strip()
-    if not query:
-        return {"ok": False, "message": "교육 장소명을 먼저 입력해 주세요."}
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        return {"ok": False, "message": "Playwright가 필요합니다. `python -m pip install playwright` 및 `python -m playwright install chromium`을 실행해 주세요."}
-
-    try:
-        from PIL import Image, ImageStat
-    except Exception:
-        return {"ok": False, "message": "Pillow가 필요합니다. `python -m pip install pillow`를 실행해 주세요."}
-
-    map_url = f"https://map.naver.com/p/search/{quote(query)}?c=16.00,0,0,0,dh"
-    crop_boxes = get_capture_boxes()
-    debug_dir = get_captures_dir()
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    result = {
-        "ok": False,
-        "message": "",
-        "map_file_path": "",
-        "map_file_paths": {},
-        "road_address": "",
-        "display_location_text": "",
-    }
-
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--window-size=1920,1080",
-                    "--force-device-scale-factor=1",
-                    "--hide-scrollbars",
-                    "--disable-gpu",
-                ],
-            )
-            context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                screen={"width": 1920, "height": 1080},
-                device_scale_factor=1,
-                locale="ko-KR",
-                timezone_id="Asia/Seoul",
-                ignore_https_errors=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = context.new_page()
-            page.goto(map_url, wait_until="domcontentloaded", timeout=50000)
-
-            # 지도/검색 UI가 최소한 붙을 때까지만 기다립니다. 오래 기다리는 networkidle은 피합니다.
-            try:
-                page.wait_for_selector("iframe#searchIframe, canvas, [class*=map], [class*=Map]", timeout=12000)
-            except Exception:
-                pass
-            page.wait_for_timeout(int(max(2.0, float(wait_seconds)) * 1000))
-
-            # 1) 상세 클릭 전, 지도 화면을 먼저 1회 캡처한 뒤 두 크기로 잘라 저장합니다.
-            screenshot_bytes = page.screenshot(type="png", full_page=False, animations="disabled")
-            image = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
-            width, height = image.size
-            blank_notes = []
-            for variant_name, crop_box in crop_boxes.items():
-                left, top, right, bottom = crop_box
-                if width >= right and height >= bottom:
-                    cropped = image.crop(crop_box)
-                    stat = ImageStat.Stat(cropped.resize((120, 96)))
-                    avg_stddev = sum(stat.stddev) / len(stat.stddev)
-                    safe_name = "small" if "작은" in variant_name else "normal"
-                    file_name = f"naver_map_capture_{safe_name}_{stamp}.png"
-                    file_path = debug_dir / file_name
-                    cropped.save(file_path, format="PNG")
-                    result["map_file_paths"][variant_name] = str(file_path)
-                    if not result["map_file_path"] and "일반" in variant_name:
-                        result["map_file_path"] = str(file_path)
-                    if avg_stddev < 3:
-                        blank_notes.append(variant_name)
-                else:
-                    result["message"] += f"{variant_name} 캡처 화면 크기가 부족합니다. 현재 {width}x{height}. "
-            if not result["map_file_path"] and result["map_file_paths"]:
-                result["map_file_path"] = next(iter(result["map_file_paths"].values()))
-            if blank_notes:
-                result["message"] += "일부 지도 이미지가 거의 단색으로 감지됩니다: " + ", ".join(blank_notes) + ". "
-
-            # 2) 지도 캡처 이후 첫 번째 검색 결과 클릭 → 상세 주소 추출
-            clicked, click_message = _click_first_naver_place_result(page)
-            if clicked:
-                page.wait_for_timeout(1600)
-                address = _extract_road_address_from_loaded_naver(page)
-                if address:
-                    result["road_address"] = address.strip()
-                    result["display_location_text"] = format_location_line(query, address)
-                else:
-                    try:
-                        frames_dump = []
-                        for frame in page.frames:
-                            frame_name = getattr(frame, "name", "") or "no_name"
-                            frame_url = getattr(frame, "url", "") or ""
-                            try:
-                                frame_text = frame.locator("body").inner_text(timeout=800)[:2500]
-                            except Exception:
-                                frame_text = ""
-                            frames_dump.append(f"\n--- FRAME: {frame_name} ---\nURL: {frame_url}\n{frame_text}")
-                        (debug_dir / f"combined_address_extract_failed_{stamp}.txt").write_text("\n".join(frames_dump), encoding="utf-8")
-                    except Exception:
-                        pass
-                    result["message"] += "상세 화면에서 도로명 주소를 찾지 못했습니다. "
-            else:
-                result["message"] += click_message + " "
-
-            browser.close()
-
-        if result["map_file_paths"] or result["road_address"]:
-            result["ok"] = True
-            details = []
-            if result["map_file_paths"]:
-                details.append("지도 2종 캡처 완료")
-            if result["road_address"]:
-                details.append(f"주소 가져오기 완료: {result['road_address']}")
-            result["message"] = (" / ".join(details) + (" " + result["message"] if result["message"] else "")).strip()
-        else:
-            result["ok"] = False
-            result["message"] = result["message"] or "지도 캡처와 도로명 주소 가져오기에 모두 실패했습니다."
-        return result
-    except Exception as exc:
-        return {"ok": False, "message": f"지도/주소 동시 가져오기에 실패했습니다. 상세: {exc}"}
-
-
-def start_naver_background_job() -> None:
-    query = str(st.session_state.get("place_name", "") or "").strip()
-    if not query:
-        st.session_state.naver_background_message = "교육 장소명 / 검색어를 먼저 입력해 주세요."
-        return
-    future = st.session_state.get("naver_combined_future")
-    if future is not None and not future.done():
-        st.session_state.naver_background_message = "이미 지도/주소 가져오기가 실행 중입니다. 잠시 후 결과를 확인해 주세요."
-        return
-    executor = get_naver_executor()
-    st.session_state.naver_combined_future = executor.submit(
-        capture_naver_map_and_address,
-        query,
-        2.6,
-    )
-    st.session_state.naver_background_message = "지도 캡처와 도로명 주소 가져오기를 백그라운드에서 시작했습니다. 다른 입력값을 계속 수정해도 됩니다."
-    st.session_state.naver_combined_started_at = time.time()
-
-
-def poll_naver_background_job() -> None:
-    future = st.session_state.get("naver_combined_future")
-    if future is None:
-        return
-    if not future.done():
-        started = st.session_state.get("naver_combined_started_at", time.time())
-        elapsed = int(time.time() - started)
-        st.session_state.naver_background_message = f"지도/주소 가져오는 중... 약 {elapsed}초 경과. 다른 입력 작업을 계속할 수 있습니다."
-        return
-    try:
-        result = future.result()
-    except Exception as exc:
-        result = {"ok": False, "message": f"백그라운드 작업 오류: {exc}"}
-    st.session_state.pop("naver_combined_future", None)
-    if result.get("map_file_paths"):
-        st.session_state.captured_map_files = result["map_file_paths"]
-        selected = st.session_state.get("selected_map_capture_variant", "일반 크기 (1200×960)")
-        chosen_path = result["map_file_paths"].get(selected) or result.get("map_file_path") or next(iter(result["map_file_paths"].values()))
-        st.session_state.captured_map_file_path = chosen_path
-        st.session_state.captured_map_data_url = ""
-        st.session_state.last_captured_map_file = chosen_path
-        st.session_state.last_map_capture_message = "지도 이미지를 2가지 크기로 자동 캡처했습니다. 아래에서 사용할 크기를 선택할 수 있습니다."
-    elif result.get("map_file_path"):
-        st.session_state.captured_map_file_path = result["map_file_path"]
-        st.session_state.captured_map_data_url = ""
-        st.session_state.last_captured_map_file = result["map_file_path"]
-        st.session_state.last_map_capture_message = "지도 이미지를 자동 캡처해 미리보기에 적용했습니다."
-    if result.get("road_address"):
-        st.session_state.road_address = result["road_address"]
-        st.session_state.last_address_fetch_message = f"도로명 주소를 가져왔습니다: {result['road_address']}"
-    if result.get("display_location_text"):
-        st.session_state.display_location_text = result["display_location_text"]
-    st.session_state.naver_background_message = result.get("message", "작업이 완료되었습니다.")
-
-
 def is_valid_hex_color(value: str) -> bool:
     return bool(re.fullmatch(r"#[0-9A-Fa-f]{6}", str(value or "").strip()))
 
@@ -1307,7 +376,7 @@ HIGHLIGHT_LABELS = {
     "welcome": "상단 안내 문구",
     "time": "교육 시작시간 강조 문구",
     "brand": "브랜드 컬러",
-    "header_text": "컬러박스 내 글자색",
+    "header_text": "섹션 제목/커리큘럼 헤더 글자색",
     "logo": "로고",
     "font": "폰트",
     "overview": "교육 개요",
@@ -1550,35 +619,6 @@ st.markdown(
         color: var(--text);
     }
 
-    .mini-loading {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin: 8px 0 10px 0;
-        padding: 9px 11px;
-        border: 1px solid #3A3A3A;
-        border-radius: 12px;
-        background: #141414;
-        color: #D6D6D6;
-        font-size: 12px;
-        line-height: 18px;
-    }
-
-    .mini-spinner {
-        width: 14px;
-        height: 14px;
-        border: 2px solid #565656;
-        border-top-color: #FFFFFF;
-        border-radius: 50%;
-        display: inline-block;
-        animation: mini-spin 0.8s linear infinite;
-        flex: 0 0 auto;
-    }
-
-    @keyframes mini-spin {
-        to { transform: rotate(360deg); }
-    }
-
     /* 탭 */
     [data-testid="stTabs"] button {
         color: var(--muted) !important;
@@ -1648,37 +688,6 @@ st.markdown(
     div[style*="overflow"]::-webkit-scrollbar-track {
         background: #111111;
         border-radius: 999px;
-    }
-
-
-
-    .naver-local-card {
-        border: 1px solid #3A3A3A;
-        background: #242424;
-        border-radius: 14px;
-        padding: 12px 14px;
-        margin: 8px 0 6px 0;
-    }
-
-    .naver-local-card-title {
-        color: #FFFFFF;
-        font-weight: 850;
-        font-size: 14px;
-        line-height: 1.35;
-        margin-bottom: 5px;
-    }
-
-    .naver-local-card-meta {
-        color: #B8B8B8;
-        font-size: 12px;
-        line-height: 1.55;
-    }
-
-    .naver-local-card-address {
-        color: #F0F0F0;
-        font-size: 12.5px;
-        line-height: 1.55;
-        margin-top: 4px;
     }
 
     /* 좌측 입력부 내부 카드 간격 압축 */
@@ -1957,93 +966,47 @@ def build_contact_rows(contacts: list[dict], text_color: str = "#343A40") -> str
     """
 
 
-def parse_curriculum_columns(columns_text: str) -> list[str]:
-    """쉼표 또는 줄바꿈으로 입력한 커리큘럼 열 이름을 정리합니다."""
-    raw = str(columns_text or "").replace("\n", ",")
-    columns = []
-    for part in raw.split(","):
-        col = part.strip()
-        if col and col not in columns:
-            columns.append(col)
-    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
-
-
-
-
-def parse_curriculum_column_defs(column_defs: object) -> list[str]:
-    """data_editor에서 편집한 열 이름 목록을 실제 커리큘럼 컬럼명으로 변환합니다."""
-    columns = []
-    for row in to_records(column_defs):
-        col = str(row.get("column_name", "") or row.get("열 이름", "") or row.get("name", "")).strip()
-        if col and col not in columns:
-            columns.append(col)
-    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
-
-
-def _cell_value_by_column(row: dict, column: str) -> str:
-    aliases = {
-        "시간": ["시간", "time"],
-        "일차": ["일차", "day"],
-        "교육 내용": ["교육 내용", "과정 내용", "subject"],
-        "강사/비고": ["강사/비고", "비고", "강사", "speaker"],
-    }
-    keys = aliases.get(column, [column])
-    for key in keys:
-        if key in row and str(row.get(key, "") or "").strip():
-            return str(row.get(key, "") or "").strip()
-    return str(row.get(column, "") or "").strip()
-
-
-def normalize_curriculum_for_columns(curriculum: list[dict], columns: list[str]) -> list[dict]:
-    records = []
-    for row in to_records(curriculum):
-        normalized = {column: _cell_value_by_column(row, column) for column in columns}
-        if any(str(value or "").strip() for value in normalized.values()):
-            records.append(normalized)
-    if not records:
-        records = [{column: "" for column in columns}]
-    return records
-
-
-def build_curriculum_header(columns: list[str], main_color: str, text_color: str) -> str:
-    header_cells = ""
-    total = len(columns)
-    for idx, column in enumerate(columns):
-        border = "border-right: 1px solid #74787C;" if idx < total - 1 else ""
-        header_cells += f"""
-                    <th style="padding: 12px 10px; background-color: {main_color}; color: {text_color}; font-size: 15px; line-height: 20px; font-weight: 700; text-align: center; {border}">{esc(column)}</th>"""
-    return f"""
-                <tr data-zone="curriculum brand header_text">{header_cells}
-                </tr>"""
-
-
-def build_curriculum_rows(curriculum: list[dict], columns: list[str] | None = None) -> str:
-    columns = columns or ["시간", "일차", "교육 내용", "강사/비고"]
+def build_curriculum_rows(curriculum: list[dict]) -> str:
     rows = ""
-    normalized_records = normalize_curriculum_for_columns(curriculum, columns)
+    palette = {
+        "1일차": "#DDF0FA",
+        "2일차": "#DDF4E8",
+        "3일차": "#F6EAD5",
+    }
 
-    for row in normalized_records:
-        if not any(str(row.get(column, "") or "").strip() for column in columns):
+    for idx, row in enumerate(to_records(curriculum)):
+        day = str(row.get("day", "") or "").strip()
+        time = str(row.get("time", "") or "").strip()
+        subject = str(row.get("subject", "") or "").strip()
+        speaker = str(row.get("speaker", "") or "").strip()
+
+        if not any([day, time, subject, speaker]):
             continue
-        cells = ""
-        for idx, column in enumerate(columns):
-            value = _cell_value_by_column(row, column)
-            is_long_text = any(token in column for token in ["내용", "주제", "과정", "비고", "메모"])
-            align = "left" if is_long_text else "center"
-            weight = "700" if is_long_text else "500"
-            border = "border-right: 1px solid #D8DEE6;" if idx < len(columns) - 1 else ""
-            cells += f"""
-            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; {border} background-color: #FFFFFF; font-size: 14px; color: #1F2933; text-align: {align}; line-height: 20px; font-weight: {weight};">
-                {esc(value) if value else "-"}
-            </td>"""
+
+        bg = palette.get(day, "#F3F4F6")
+        if idx % 2 == 1 and day not in palette:
+            bg = "#FAFAFA"
+
         rows += f"""
-        <tr>{cells}
+        <tr>
+            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; border-right: 1px solid #D8DEE6; background-color: #FFFFFF; font-size: 14px; color: #343A40; text-align: center; line-height: 20px; white-space: nowrap;">
+                {esc(time)}
+            </td>
+            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; border-right: 1px solid #D8DEE6; background-color: {bg}; font-size: 14px; color: #1F2933; text-align: center; line-height: 20px; font-weight: 700;">
+                {esc(day)}
+            </td>
+            <td style="padding: 13px 14px; border-bottom: 1px solid #D8DEE6; border-right: 1px solid #D8DEE6; background-color: {bg}; font-size: 15px; color: #1F2933; line-height: 21px; font-weight: 700;">
+                {esc(subject)}
+            </td>
+            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; background-color: {bg}; font-size: 14px; color: #343A40; text-align: center; line-height: 20px;">
+                {esc(speaker) if speaker else "-"}
+            </td>
         </tr>
         """
 
-    return rows or f"""
+    return rows or """
         <tr>
-            <td colspan="{len(columns)}" style="padding: 18px 10px; border-bottom: 1px solid #D8DEE6; background-color: #FFFFFF; font-size: 14px; color: #6B7280; text-align: center;">
+            <td colspan="4" style="padding: 18px 10px; border-bottom: 1px solid #D8DEE6; background-color: #FFFFFF; font-size: 14px; color: #6B7280; text-align: center;">
                 입력된 커리큘럼이 없습니다.
             </td>
         </tr>
@@ -2089,7 +1052,6 @@ def build_final_mail_html(
     day1_time: str,
     day2_time: str,
     place_name: str,
-    road_address: str,
     map_image_src: str,
     delivery_type: str,
     welcome_title: str,
@@ -2100,8 +1062,6 @@ def build_final_mail_html(
     edited_contacts: list[dict],
     main_color: str,
     footer_color: str,
-    curriculum_columns_text: str = "시간, 일차, 교육 내용, 강사/비고",
-    curriculum_title: str = "상세 커리큘럼",
     section_text_color: str = "#343A40",
     curr_header_text_color: str = "#FFFFFF",
     logo_image_data_url: str = "",
@@ -2112,20 +1072,7 @@ def build_final_mail_html(
 ) -> str:
     company_display = str(company_name or "").strip()
     full_course_name = f"{company_display} {course_name}".strip()
-    location_lines = []
-    for location_part in [place_name, road_address]:
-        for location_line in str(location_part or "").splitlines():
-            clean_location_line = location_line.strip()
-            if clean_location_line and clean_location_line not in location_lines:
-                location_lines.append(clean_location_line)
-    curriculum_columns = parse_curriculum_columns(curriculum_columns_text)
-    curriculum_header_html = build_curriculum_header(curriculum_columns, main_color, curr_header_text_color)
-    curriculum_html = build_curriculum_rows(edited_curriculum, curriculum_columns)
-    curriculum_title_html = ""
-    if str(curriculum_title or "").strip():
-        curriculum_title_html = f"""
-        <p style="margin: 4px 0 8px 0; font-size: 15px; line-height: 21px; color: #222222; font-weight: 800;">{esc(curriculum_title)}</p>
-        """
+    curriculum_html = build_curriculum_rows(edited_curriculum)
     info_html = build_bullet_rows(info_text.split("\n"), text_color=section_text_color)
     contacts_html = build_contact_rows(edited_contacts, text_color=section_text_color)
     top_logo_html = build_logo_row(logo_image_data_url, logo_position, "top", logo_max_height)
@@ -2196,12 +1143,16 @@ def build_final_mail_html(
             ], text_color=section_text_color)}
         </table>
 
-        {curriculum_title_html}
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6; background-color: #FFFFFF;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6;">
             <thead>
-                {curriculum_header_html}
+                <tr data-zone="curriculum brand header_text">
+                    <th style="padding: 12px 10px; background-color: {main_color}; color: {curr_header_text_color}; font-size: 15px; line-height: 20px; font-weight: 700; text-align: center; border-right: 1px solid #74787C;">시간</th>
+                    <th style="padding: 12px 10px; background-color: {main_color}; color: {curr_header_text_color}; font-size: 15px; line-height: 20px; font-weight: 700; text-align: center; border-right: 1px solid #74787C;">일차</th>
+                    <th style="padding: 12px 10px; background-color: {main_color}; color: {curr_header_text_color}; font-size: 15px; line-height: 20px; font-weight: 700; text-align: center; border-right: 1px solid #74787C;">교육 내용</th>
+                    <th style="padding: 12px 10px; background-color: {main_color}; color: {curr_header_text_color}; font-size: 15px; line-height: 20px; font-weight: 700; text-align: center;">강사/비고</th>
+                </tr>
             </thead>
-            <tbody style="background-color: #FFFFFF;">
+            <tbody>
                 {curriculum_html}
             </tbody>
         </table>
@@ -2209,7 +1160,7 @@ def build_final_mail_html(
         {build_section_title(2, "교육 장소", main_color, curr_header_text_color, "location")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="location" style="width: 100%; border-collapse: collapse; margin: 0 0 32px 0;">
-            {build_bullet_rows(location_lines, text_color=section_text_color)}
+            {build_bullet_rows([place_name], text_color=section_text_color)}
             <tr>
                 <td colspan="2" style="padding: 0 0 0 26px;">
                     {map_html}
@@ -2418,8 +1369,6 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 # 쿼리 파라미터 기반 스포이드 색상 반영
 # -----------------------------
 init_defaults()
-apply_pending_location_update()
-poll_split_naver_jobs()
 
 picked_color = get_query_param("picked_color")
 picked_target = get_query_param("picked_target")
@@ -2455,142 +1404,6 @@ with col_input:
     with st.container(height=SIDE_PANEL_HEIGHT, border=False):
 
         with st.container(border=True):
-            st.markdown("#### 장소")
-
-            place_name = st.text_input("교육 장소명 / 검색어", key="place_name")
-
-            naver_map_query = quote(str(place_name or "").strip())
-            naver_map_url = f"https://map.naver.com/p/search/{naver_map_query}?c=15.00,0,0,0,dh" if naver_map_query else "https://map.naver.com/p/search/"
-            st.markdown(
-                f'<a class="naver-map-button" href="{naver_map_url}" target="_blank" rel="noopener noreferrer">🗺️ 네이버 지도 바로가기</a>',
-                unsafe_allow_html=True,
-            )
-
-            with st.expander("장소 후보 검색", expanded=False):
-                if st.button("🔎 장소 검색", use_container_width=True):
-                    api_id, api_secret = get_naver_local_api_credentials()
-                    result = search_naver_local_api(str(st.session_state.get("place_name", "") or ""), api_id, api_secret, 5)
-                    st.session_state.naver_local_results = result.get("items", [])
-                    st.session_state.naver_local_search_message = result.get("message", "")
-
-                api_message = st.session_state.get("naver_local_search_message", "")
-                if api_message:
-                    st.caption(api_message)
-
-                local_results = st.session_state.get("naver_local_results", []) or []
-                if local_results:
-                    for idx, item in enumerate(local_results, start=1):
-                        title = esc(item.get("title", ""))
-                        category = esc(item.get("category", ""))
-                        road = esc(item.get("roadAddress", ""))
-                        addr = esc(item.get("address", ""))
-                        lon = item.get("lon")
-                        lat = item.get("lat")
-                        coord_text = f"{lon:.7f}, {lat:.7f}" if isinstance(lon, float) and isinstance(lat, float) else ""
-                        link = naver_item_map_link(item, str(st.session_state.get("place_name", "") or ""))
-                        st.markdown(
-                            f"""<div class="naver-local-card">
-                                <div class="naver-local-card-title">{idx}. {title}</div>
-                                <div class="naver-local-card-meta">{category}</div>
-                                <div class="naver-local-card-address">{road or addr}</div>
-                                <div class="naver-local-card-meta">{coord_text}</div>
-                                <div class="naver-local-card-meta"><a href="{esc_attr(link)}" target="_blank" rel="noopener noreferrer">네이버 지도에서 열기</a></div>
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
-                        st.button(
-                            f"이 장소 사용 #{idx}",
-                            key=f"use_naver_local_{idx}",
-                            use_container_width=True,
-                            on_click=apply_naver_local_item,
-                            args=(item,),
-                        )
-                else:
-                    st.caption("장소 검색을 누르면 후보가 표시됩니다.")
-
-            col_auto1, col_auto2 = st.columns(2)
-            with col_auto1:
-                st.button(
-                    "📍 주소 자동 입력",
-                    use_container_width=True,
-                    on_click=apply_first_naver_local_result,
-                    help="첫 번째 장소 후보의 주소를 바로 입력합니다.",
-                )
-            with col_auto2:
-                if st.button("🧹 지도/주소 결과 비우기", use_container_width=True):
-                    st.session_state.road_address = ""
-                    st.session_state.captured_map_data_url = ""
-                    st.session_state.captured_map_file_path = ""
-                    st.session_state.pop("last_captured_map_file", None)
-                    st.session_state.pop("captured_map_files", None)
-                    st.session_state.pop("naver_map_future", None)
-                    st.session_state.pop("naver_address_future", None)
-                    st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
-                    st.session_state.last_address_fetch_message = "도로명 주소를 비웠습니다."
-                    st.session_state.naver_map_background_message = ""
-                    st.session_state.naver_address_background_message = ""
-
-            road_address = st.text_input(
-                "가져온 도로명 주소",
-                key="road_address",
-                help="API로 가져온 주소입니다. 최종 안내문 문구는 아래 '안내문 표시 내용'에서 직접 수정할 수 있습니다.",
-            )
-            last_address_fetch_message = st.session_state.get("last_address_fetch_message", "")
-            if last_address_fetch_message:
-                st.caption(last_address_fetch_message)
-
-            display_location_text = st.text_area(
-                "안내문 표시 내용",
-                key="display_location_text",
-                height=80,
-                help="최종 HTML/이미지 안내문의 교육 장소 영역에 들어갈 문구입니다. 예: 멀티캠퍼스 선릉  (서울 강남구 선릉로 428)",
-            )
-
-            st.markdown(
-                """
-                <div class="capture-guide">
-                    <strong>지도 자동 캡처</strong><br>
-                    이전에 비교적 안정적으로 동작했던 방식으로 되돌렸습니다. 네이버 지도 로딩을 충분히 기다린 뒤 1920×1080 기준 (585, 87)~(1785, 1047) 영역을 캡처합니다.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            col_map_cap1, col_map_cap2 = st.columns([1, 1])
-            with col_map_cap1:
-                if st.button("📸 지도 자동 캡처", use_container_width=True):
-                    with st.spinner("네이버 지도 검색 화면을 열고 캡처 중입니다. 환경에 따라 20~40초 정도 걸릴 수 있습니다..."):
-                        ok, message = capture_naver_map_region(place_name)
-                    st.session_state.last_map_capture_message = message
-                    if ok:
-                        st.success(message)
-                    else:
-                        st.error(message)
-            with col_map_cap2:
-                if st.button("🧹 캡처 지도 제거", use_container_width=True):
-                    st.session_state.captured_map_data_url = ""
-                    st.session_state.captured_map_file_path = ""
-                    st.session_state.pop("last_captured_map_file", None)
-                    st.session_state.pop("captured_map_files", None)
-                    st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
-
-            captured_map_path = st.session_state.get("captured_map_file_path", "") or st.session_state.get("last_captured_map_file", "")
-            captured_map_data_url = file_path_to_data_url(captured_map_path) or st.session_state.get("captured_map_data_url", "")
-            last_map_capture_message = st.session_state.get("last_map_capture_message", "")
-            if last_map_capture_message:
-                st.caption(last_map_capture_message)
-            if captured_map_data_url:
-                st.image(captured_map_data_url, caption="자동 캡처된 지도 이미지", use_container_width=True)
-                st.caption("현재 지도 영역에는 자동 캡처 이미지가 적용됩니다. 다른 이미지를 직접 첨부하면 첨부 이미지가 우선 적용됩니다.")
-
-            map_file = st.file_uploader(
-                "지도 이미지 첨부",
-                type=["png", "jpg", "jpeg", "gif", "webp"],
-                help="자동 캡처가 느리거나 실패하면 직접 저장한 지도 이미지를 첨부해 주세요.",
-                key="map_file_uploader",
-            )
-            map_image_src = file_to_data_url(map_file) or captured_map_data_url
-
-        with st.container(border=True):
             st.markdown("#### 기본 정보")
             company_name = st.text_input(
                 "회사 이름",
@@ -2618,7 +1431,6 @@ with col_input:
             welcome_title = st.text_input("환영 제목", key="welcome_title")
             welcome_body_text = st.text_area("상단 안내 본문", key="welcome_body_text", height=110)
             time_notice_text = st.text_area("교육 시작시간 강조 문구", key="time_notice_text", height=80)
-            date_range = st.text_input("교육 일정 (예: 6/16(월)~6/17(화))", key="date_range")
             col_t1, col_t2 = st.columns(2)
             with col_t1:
                 day1_time = st.text_input("1일차 시작 시간", key="day1_time")
@@ -2642,11 +1454,11 @@ with col_input:
 
             st.markdown("---")
             curr_header_text_color = st.color_picker(
-                "컬러박스 내 글자색",
+                "섹션 제목/커리큘럼 헤더 글자색",
                 key="curr_header_text_color_picker",
             )
             section_text_color = "#000000"
-            st.caption("본문 글자색은 검정색으로 고정됩니다. 위 색상은 브랜드 컬러 박스 안의 글자에 적용됩니다.")
+            st.caption("본문 글자색은 검정색으로 고정됩니다. 위 색상은 섹션 제목 박스와 커리큘럼 헤더 글자에 적용됩니다.")
 
         with st.container(border=True):
             st.markdown("#### 로고 / 폰트")
@@ -2690,27 +1502,74 @@ with col_input:
             font_stack = css_font_stack(primary_font)
 
         with st.container(border=True):
-            st.markdown("#### 커리큘럼")
-            curriculum_title = st.text_input("커리큘럼 표 이름", key="curriculum_title")
-            curriculum_columns_text = st.text_area(
-                "표 헤더명",
-                key="curriculum_columns_text",
-                height=88,
-                help="쉼표 또는 줄바꿈으로 열 이름을 입력하세요. 예: 시간, 일차, 교육 내용, 강사/비고. 줄을 추가/삭제하면 표 열도 같이 추가/삭제됩니다.",
-            )
-            curriculum_columns = parse_curriculum_columns(curriculum_columns_text)
-            st.session_state.curriculum_column_defs = [{"column_name": col} for col in curriculum_columns]
+            st.markdown("#### 일정 및 장소")
+            date_range = st.text_input("교육 일정 (예: 6/16(월)~6/17(화))", key="date_range")
 
-            curriculum_editor_data = normalize_curriculum_for_columns(st.session_state.curriculum, curriculum_columns)
+            place_name = st.text_input("교육 장소명 및 주소", key="place_name")
+            naver_map_query = quote(str(place_name or "").strip())
+            naver_map_url = f"https://map.naver.com/p/search/{naver_map_query}?c=15.00,0,0,0,dh" if naver_map_query else "https://map.naver.com/p/search/"
+            st.markdown(
+                f'<a class="naver-map-button" href="{naver_map_url}" target="_blank" rel="noopener noreferrer">🗺️ 네이버 지도 바로가기</a>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                """
+                <div class="capture-guide">
+                    <strong>네이버 지도 백그라운드 캡처</strong><br>
+                    입력한 교육 장소명으로 네이버 지도 검색 화면을 백그라운드에서 열고, 1920×1080 화면 기준 좌표 (585, 87)~(1785, 1047) 영역을 PNG로 캡처해 지도 영역에 자동 적용합니다.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_map_cap1, col_map_cap2 = st.columns([1, 1])
+            with col_map_cap1:
+                if st.button("📸 지도 자동 캡처", use_container_width=True):
+                    with st.spinner("네이버 지도 검색 화면을 백그라운드에서 열고 캡처 중입니다. 지도 로딩 때문에 10~20초 정도 걸릴 수 있습니다..."):
+                        ok, message = capture_naver_map_region(place_name)
+                    st.session_state.last_map_capture_message = message
+                    if ok:
+                        st.success(message)
+                    else:
+                        st.error(message)
+            with col_map_cap2:
+                if st.button("🧹 캡처 지도 제거", use_container_width=True):
+                    st.session_state.captured_map_data_url = ""
+                    st.session_state.captured_map_file_path = ""
+                    st.session_state.pop("last_captured_map_file", None)
+                    st.session_state.last_map_capture_message = "캡처 지도를 제거했습니다."
+
+            captured_map_path = st.session_state.get("captured_map_file_path", "") or st.session_state.get("last_captured_map_file", "")
+            captured_map_data_url = file_path_to_data_url(captured_map_path) or st.session_state.get("captured_map_data_url", "")
+            last_map_capture_message = st.session_state.get("last_map_capture_message", "")
+            if last_map_capture_message:
+                st.caption(last_map_capture_message)
+            if captured_map_data_url:
+                st.image(captured_map_data_url, caption="자동 캡처된 지도 이미지", use_container_width=True)
+                st.caption("현재 지도 영역에는 자동 캡처 이미지가 적용됩니다. 다른 이미지를 직접 첨부하면 첨부 이미지가 우선 적용됩니다.")
+
+            map_file = st.file_uploader(
+                "지도 이미지 첨부",
+                type=["png", "jpg", "jpeg", "gif", "webp"],
+                help="캡처 기능이 환경상 동작하지 않을 때는 직접 저장한 지도 이미지를 첨부해 주세요.",
+                key="map_file_uploader",
+            )
+            map_image_src = file_to_data_url(map_file) or captured_map_data_url
+
+        with st.container(border=True):
+            st.markdown("#### 커리큘럼")
+            
             edited_curr = st.data_editor(
-                curriculum_editor_data,
+                st.session_state.curriculum,
                 num_rows="dynamic",
-                column_order=curriculum_columns,
-                column_config={column: column for column in curriculum_columns},
+                column_config={
+                    "day": "일차",
+                    "time": "시간",
+                    "subject": "교육 내용",
+                    "speaker": "강사/비고",
+                },
                 width="stretch",
                 key="curr_editor",
             )
-            st.session_state.curriculum = to_records(edited_curr)
 
         with st.container(border=True):
             st.markdown("#### 안내 사항 / 문의처")
@@ -2731,16 +1590,13 @@ final_mail_html = build_final_mail_html(
     date_range=date_range,
     day1_time=day1_time,
     day2_time=day2_time,
-    place_name=display_location_text,
-    road_address="",
+    place_name=place_name,
     map_image_src=map_image_src,
     delivery_type=delivery_type,
     welcome_title=welcome_title,
     welcome_body_text=welcome_body_text,
     time_notice_text=time_notice_text,
     edited_curriculum=edited_curr,
-    curriculum_columns_text=curriculum_columns_text,
-    curriculum_title=curriculum_title,
     info_text=info_text,
     edited_contacts=edited_contacts,
     main_color=main_color,

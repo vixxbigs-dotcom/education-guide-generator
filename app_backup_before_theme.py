@@ -45,13 +45,13 @@ load_local_env_file_once()
 # 기본 입력값 / 초기화 유틸
 # -----------------------------
 DEFAULT_CURRICULUM = [
-    {"day": "Day1", "time": "10:00 ~ 12:00", "subject": "M1. 팀빌딩과 회고", "speaker": ""},
-    {"day": "Day1", "time": "13:00 ~ 16:00", "subject": "M2. 이전부터 오늘까지 나", "speaker": ""},
-    {"day": "Day1", "time": "16:00 ~ 18:00", "subject": "M3. 내일의 나 (경력 적응성의 관점)", "speaker": ""},
-    {"day": "Day1", "time": "18:00 ~ 19:00", "subject": "석식 만찬", "speaker": ""},
-    {"day": "Day2", "time": "09:00 ~ 12:00", "subject": "M4. HMS/RESPECT", "speaker": "사내강사"},
-    {"day": "Day2", "time": "13:00 ~ 15:00", "subject": "M5. 잡 크래프팅과 일의 의미, 몰입", "speaker": ""},
-    {"day": "Day2", "time": "15:00 ~ 17:00", "subject": "M6. 개인의 목표와 조직의 목표 align", "speaker": ""},
+    {"day": "1일차", "time": "10:00 ~ 12:00", "subject": "M1. 팀빌딩과 회고", "speaker": ""},
+    {"day": "1일차", "time": "13:00 ~ 16:00", "subject": "M2. 이전부터 오늘까지 나", "speaker": ""},
+    {"day": "1일차", "time": "16:00 ~ 18:00", "subject": "M3. 내일의 나 (경력 적응성의 관점)", "speaker": ""},
+    {"day": "1일차", "time": "18:00 ~ 19:00", "subject": "석식 만찬", "speaker": ""},
+    {"day": "2일차", "time": "09:00 ~ 12:00", "subject": "M4. HMS/RESPECT", "speaker": "사내강사"},
+    {"day": "2일차", "time": "13:00 ~ 15:00", "subject": "M5. 잡 크래프팅과 일의 의미, 몰입", "speaker": ""},
+    {"day": "2일차", "time": "15:00 ~ 17:00", "subject": "M6. 개인의 목표와 조직의 목표 align", "speaker": ""},
 ]
 
 DEFAULT_CONTACTS = [
@@ -96,12 +96,11 @@ DEFAULT_VALUES = {
     "naver_local_results": [],
     "naver_local_search_message": "",
     "selected_naver_local_index": -1,
-    "show_curriculum_table": True,
     "curriculum_title": "상세 커리큘럼",
-    "curriculum_columns_text": "Day, 시간, 교육 내용, 강사/비고",
+    "curriculum_columns_text": "시간, 일차, 교육 내용, 강사/비고",
     "curriculum_column_defs": [
-        {"column_name": "Day"},
         {"column_name": "시간"},
+        {"column_name": "일차"},
         {"column_name": "교육 내용"},
         {"column_name": "강사/비고"},
     ],
@@ -114,14 +113,6 @@ DEFAULT_VALUES = {
     "last_map_capture_message": "",
     "pasted_map_data_url": "",
     "pending_location_update": None,
-    "zoom_url": "",
-    "overview_section_title": "교육 개요",
-    "location_section_title": "교육 장소",
-    "notice_section_title": "안내 사항",
-    "contact_section_title": "관련 문의",
-    "curriculum_odd_row_color_picker": "#FFFFFF",
-    "curriculum_even_row_color_picker": "#FFFFFF",
-    "excel_import_message": "",
 }
 
 WIDGET_KEYS_TO_CLEAR_ON_RESET = [
@@ -131,7 +122,6 @@ WIDGET_KEYS_TO_CLEAR_ON_RESET = [
     "curriculum_column_defs_editor",
     "contacts_editor",
     "font_folder_select",
-    "curriculum_excel_uploader",
 ]
 
 
@@ -143,62 +133,6 @@ def init_defaults() -> None:
         st.session_state.curriculum = [row.copy() for row in DEFAULT_CURRICULUM]
     if "contacts" not in st.session_state:
         st.session_state.contacts = [row.copy() for row in DEFAULT_CONTACTS]
-
-
-def order_curriculum_columns(columns: list[str]) -> list[str]:
-    """시간표 기본 열 순서를 Day → 시간 → 나머지 순서로 정리합니다."""
-    cleaned: list[str] = []
-    for col in columns:
-        clean = str(col or "").strip()
-        if clean == "일차":
-            clean = "Day"
-        if clean and clean not in cleaned:
-            cleaned.append(clean)
-
-    ordered: list[str] = []
-    for priority in ["Day", "시간"]:
-        if priority in cleaned:
-            ordered.append(priority)
-    ordered.extend([col for col in cleaned if col not in ordered])
-    return ordered or ["Day", "시간", "교육 내용", "강사/비고"]
-
-
-def migrate_curriculum_day_defaults() -> None:
-    """기존 세션에 남아 있는 '일차/1일차/2일차' 기본값과 열 순서를 Day 표기로 정리합니다."""
-    column_defs = st.session_state.get("curriculum_column_defs", [])
-    raw_columns = []
-    changed_defs = False
-    for row in to_records(column_defs):
-        col = str(row.get("column_name", "") or "").strip()
-        if col == "일차":
-            col = "Day"
-            changed_defs = True
-        if col:
-            raw_columns.append(col)
-
-    ordered_columns = order_curriculum_columns(raw_columns)
-    if raw_columns and ordered_columns != raw_columns:
-        changed_defs = True
-    if ordered_columns and changed_defs:
-        migrated_defs = [{"column_name": col} for col in ordered_columns]
-        st.session_state.curriculum_column_defs = migrated_defs
-        st.session_state.curriculum_columns_text = ", ".join(ordered_columns)
-
-    curriculum_rows = []
-    changed_rows = False
-    for row in to_records(st.session_state.get("curriculum", [])):
-        new_row = dict(row)
-        for key in ["day", "Day", "일차"]:
-            value = str(new_row.get(key, "") or "").strip()
-            if value == "1일차":
-                new_row[key] = "Day1"
-                changed_rows = True
-            elif value == "2일차":
-                new_row[key] = "Day2"
-                changed_rows = True
-        curriculum_rows.append(new_row)
-    if curriculum_rows and changed_rows:
-        st.session_state.curriculum = curriculum_rows
 
 
 def reset_all_fields() -> None:
@@ -1607,7 +1541,6 @@ def render_template_html(template: str, replacements: dict[str, str]) -> str:
 # Streamlit UI 스타일
 # -----------------------------
 init_defaults()
-migrate_curriculum_day_defaults()
 
 # 화면 테마는 상단 우측 셀렉트박스에서 바꿉니다.
 # CSS는 위젯 렌더링 전 현재 session_state 값을 기준으로 먼저 적용합니다.
@@ -2850,7 +2783,7 @@ def parse_curriculum_columns(columns_text: str) -> list[str]:
         col = part.strip()
         if col and col not in columns:
             columns.append(col)
-    return columns or ["Day", "시간", "교육 내용", "강사/비고"]
+    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
 
 
 
@@ -2862,14 +2795,13 @@ def parse_curriculum_column_defs(column_defs: object) -> list[str]:
         col = str(row.get("column_name", "") or row.get("열 이름", "") or row.get("name", "")).strip()
         if col and col not in columns:
             columns.append(col)
-    return columns or ["Day", "시간", "교육 내용", "강사/비고"]
+    return columns or ["시간", "일차", "교육 내용", "강사/비고"]
 
 
 def _cell_value_by_column(row: dict, column: str) -> str:
     aliases = {
         "시간": ["시간", "time"],
-        "Day": ["Day", "day", "일차"],
-        "일차": ["일차", "day", "Day"],
+        "일차": ["일차", "day"],
         "교육 내용": ["교육 내용", "과정 내용", "subject"],
         "강사/비고": ["강사/비고", "비고", "강사", "speaker"],
     }
@@ -2891,146 +2823,6 @@ def normalize_curriculum_for_columns(curriculum: list[dict], columns: list[str])
     return records
 
 
-
-def _normalize_excel_header(value: object) -> str:
-    text = str(value or "").strip().lower()
-    text = re.sub(r"\s+", "", text)
-    text = text.replace("_", "").replace("-", "").replace("/", "")
-    return text
-
-
-def _excel_cell_to_text(value: object) -> str:
-    """엑셀 셀 값을 시간표 입력용 문자열로 변환합니다."""
-    if value is None:
-        return ""
-    try:
-        from datetime import date as _date, datetime as _datetime, time as _time
-        if isinstance(value, _datetime):
-            if value.time() == _time(0, 0):
-                return value.strftime("%Y-%m-%d")
-            return value.strftime("%Y-%m-%d %H:%M")
-        if isinstance(value, _date):
-            return value.strftime("%Y-%m-%d")
-        if isinstance(value, _time):
-            return value.strftime("%H:%M")
-    except Exception:
-        pass
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value).strip()
-
-
-def parse_curriculum_excel(uploaded_file, target_columns: list[str]) -> tuple[list[dict], list[str], str]:
-    """첫 번째 워크시트의 시간표를 읽어 현재 커리큘럼 열 구조에 맞춰 변환합니다.
-
-    지원 형식은 .xlsx/.xlsm입니다. 첫 20행 안에서 Day·시간·교육 내용·강사/비고와
-    유사한 헤더가 있는 행을 자동 탐지하며, 병합 셀 때문에 비어 있는 Day 값은 아래 행으로 이어받습니다.
-    """
-    try:
-        from openpyxl import load_workbook
-    except Exception as exc:
-        raise RuntimeError("엑셀 업로드에는 openpyxl이 필요합니다. `python -m pip install openpyxl`을 실행해 주세요.") from exc
-
-    if uploaded_file is None:
-        raise ValueError("엑셀 파일을 먼저 첨부해 주세요.")
-
-    file_name = str(getattr(uploaded_file, "name", "") or "").lower()
-    if not file_name.endswith((".xlsx", ".xlsm")):
-        raise ValueError("현재는 .xlsx 또는 .xlsm 파일만 지원합니다.")
-
-    workbook = load_workbook(io.BytesIO(uploaded_file.getvalue()), data_only=True, read_only=False)
-    worksheet = workbook.active
-    values = [list(row) for row in worksheet.iter_rows(values_only=True)]
-    if not values:
-        raise ValueError("엑셀 파일에서 데이터를 찾지 못했습니다.")
-
-    alias_groups = {
-        "Day": {"day", "일차", "일정", "일자", "차수"},
-        "시간": {"시간", "교육시간", "강의시간", "time"},
-        "교육 내용": {"교육내용", "과정내용", "강의내용", "내용", "주제", "모듈", "subject"},
-        "강사/비고": {"강사비고", "강사", "비고", "담당", "speaker", "remark", "remarks"},
-    }
-    normalized_aliases = {
-        canonical: {_normalize_excel_header(alias) for alias in aliases | {canonical}}
-        for canonical, aliases in alias_groups.items()
-    }
-
-    best_index = -1
-    best_score = 0
-    for row_index, row in enumerate(values[:20]):
-        normalized = [_normalize_excel_header(cell) for cell in row]
-        score = sum(
-            1
-            for aliases in normalized_aliases.values()
-            if any(cell and cell in aliases for cell in normalized)
-        )
-        if score > best_score:
-            best_index = row_index
-            best_score = score
-
-    if best_index < 0 or best_score < 2:
-        # 명확한 헤더가 없으면 첫 번째 비어 있지 않은 행을 헤더로 사용합니다.
-        best_index = next((idx for idx, row in enumerate(values) if any(str(cell or "").strip() for cell in row)), -1)
-        if best_index < 0:
-            raise ValueError("엑셀 파일에서 헤더 행을 찾지 못했습니다.")
-
-    raw_headers = [_excel_cell_to_text(cell) for cell in values[best_index]]
-    normalized_headers = [_normalize_excel_header(cell) for cell in raw_headers]
-
-    canonical_source_indexes: dict[str, int] = {}
-    for canonical, aliases in normalized_aliases.items():
-        for index, header in enumerate(normalized_headers):
-            if header and header in aliases:
-                canonical_source_indexes[canonical] = index
-                break
-
-    # 열명이 특이한 파일은 앞 4개 열을 Day/시간/교육 내용/강사·비고 순으로 보조 매핑합니다.
-    for fallback_index, canonical in enumerate(["Day", "시간", "교육 내용", "강사/비고"]):
-        if canonical not in canonical_source_indexes and fallback_index < len(raw_headers):
-            canonical_source_indexes[canonical] = fallback_index
-
-    output_columns = order_curriculum_columns(target_columns or ["Day", "시간", "교육 내용", "강사/비고"])
-    rows: list[dict] = []
-    previous_day = ""
-
-    for raw_row in values[best_index + 1:]:
-        canonical_values: dict[str, str] = {}
-        for canonical, source_index in canonical_source_indexes.items():
-            cell = raw_row[source_index] if source_index < len(raw_row) else None
-            canonical_values[canonical] = _excel_cell_to_text(cell)
-
-        if canonical_values.get("Day"):
-            previous_day = canonical_values["Day"]
-        elif previous_day:
-            canonical_values["Day"] = previous_day
-
-        mapped: dict[str, str] = {}
-        for column in output_columns:
-            normalized_column = _normalize_excel_header(column)
-            if normalized_column in normalized_aliases["Day"]:
-                mapped[column] = canonical_values.get("Day", "")
-            elif normalized_column in normalized_aliases["시간"]:
-                mapped[column] = canonical_values.get("시간", "")
-            elif normalized_column in normalized_aliases["교육 내용"]:
-                mapped[column] = canonical_values.get("교육 내용", "")
-            elif normalized_column in normalized_aliases["강사/비고"]:
-                mapped[column] = canonical_values.get("강사/비고", "")
-            else:
-                # 동일한 원본 헤더명이 있으면 사용자 정의 열에도 반영합니다.
-                try:
-                    source_index = normalized_headers.index(normalized_column)
-                except ValueError:
-                    source_index = -1
-                mapped[column] = _excel_cell_to_text(raw_row[source_index]) if 0 <= source_index < len(raw_row) else ""
-
-        if any(str(value or "").strip() for value in mapped.values()):
-            rows.append(mapped)
-
-    if not rows:
-        raise ValueError("헤더 아래에서 시간표 데이터를 찾지 못했습니다.")
-
-    return rows, output_columns, f"{worksheet.title} 시트에서 시간표 {len(rows)}행을 불러왔습니다."
-
 def build_curriculum_header(columns: list[str], main_color: str, text_color: str) -> str:
     header_cells = ""
     total = len(columns)
@@ -3043,20 +2835,14 @@ def build_curriculum_header(columns: list[str], main_color: str, text_color: str
                 </tr>"""
 
 
-def build_curriculum_rows(
-    curriculum: list[dict],
-    columns: list[str] | None = None,
-    odd_row_color: str = "#FFFFFF",
-    even_row_color: str = "#FFFFFF",
-) -> str:
-    columns = columns or ["Day", "시간", "교육 내용", "강사/비고"]
+def build_curriculum_rows(curriculum: list[dict], columns: list[str] | None = None) -> str:
+    columns = columns or ["시간", "일차", "교육 내용", "강사/비고"]
     rows = ""
     normalized_records = normalize_curriculum_for_columns(curriculum, columns)
 
-    for row_index, row in enumerate(normalized_records):
+    for row in normalized_records:
         if not any(str(row.get(column, "") or "").strip() for column in columns):
             continue
-        row_background = odd_row_color if row_index % 2 == 0 else even_row_color
         cells = ""
         for idx, column in enumerate(columns):
             value = _cell_value_by_column(row, column)
@@ -3065,7 +2851,7 @@ def build_curriculum_rows(
             weight = "700" if is_long_text else "500"
             border = "border-right: 1px solid #D8DEE6;" if idx < len(columns) - 1 else ""
             cells += f"""
-            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; {border} background-color: {row_background}; font-size: 14px; color: #1F2933; text-align: {align}; line-height: 20px; font-weight: {weight};">
+            <td style="padding: 13px 10px; border-bottom: 1px solid #D8DEE6; {border} background-color: #FFFFFF; font-size: 14px; color: #1F2933; text-align: {align}; line-height: 20px; font-weight: {weight};">
                 {esc(value) if value else "-"}
             </td>"""
         rows += f"""
@@ -3132,9 +2918,8 @@ def build_final_mail_html(
     edited_contacts: list[dict],
     main_color: str,
     footer_color: str,
-    curriculum_columns_text: str = "Day, 시간, 교육 내용, 강사/비고",
+    curriculum_columns_text: str = "시간, 일차, 교육 내용, 강사/비고",
     curriculum_title: str = "상세 커리큘럼",
-    show_curriculum_table: bool = True,
     section_text_color: str = "#343A40",
     curr_header_text_color: str = "#FFFFFF",
     logo_image_data_url: str = "",
@@ -3142,13 +2927,6 @@ def build_final_mail_html(
     logo_max_height: int = 52,
     font_stack: str = "'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif",
     embedded_font_css: str = "",
-    zoom_url: str = "",
-    overview_section_title: str = "교육 개요",
-    location_section_title: str = "교육 장소",
-    notice_section_title: str = "안내 사항",
-    contact_section_title: str = "관련 문의",
-    curriculum_odd_row_color: str = "#FFFFFF",
-    curriculum_even_row_color: str = "#FFFFFF",
 ) -> str:
     company_display = str(company_name or "").strip()
     full_course_name = f"{company_display} {course_name}".strip()
@@ -3160,38 +2938,12 @@ def build_final_mail_html(
                 location_lines.append(clean_location_line)
     curriculum_columns = parse_curriculum_columns(curriculum_columns_text)
     curriculum_header_html = build_curriculum_header(curriculum_columns, main_color, curr_header_text_color)
-    curriculum_html = build_curriculum_rows(
-        edited_curriculum,
-        curriculum_columns,
-        odd_row_color=curriculum_odd_row_color,
-        even_row_color=curriculum_even_row_color,
-    )
+    curriculum_html = build_curriculum_rows(edited_curriculum, curriculum_columns)
     curriculum_title_html = ""
     if str(curriculum_title or "").strip():
         curriculum_title_html = f"""
         <p style="margin: 4px 0 8px 0; font-size: 15px; line-height: 21px; color: #222222; font-weight: 800;">{esc(curriculum_title)}</p>
         """
-    curriculum_block_html = ""
-    if show_curriculum_table:
-        curriculum_block_html = f"""
-        {curriculum_title_html}
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6; background-color: #FFFFFF;">
-            <thead>
-                {curriculum_header_html}
-            </thead>
-            <tbody style="background-color: #FFFFFF;">
-                {curriculum_html}
-            </tbody>
-        </table>
-        """
-    overview_rows = [
-        f"교육명 : {full_course_name}",
-        f"교육일정 : {date_range}  *집합 교육 기준",
-    ]
-    if show_curriculum_table:
-        overview_rows.append("교육시간 : 하기 표 참고  ※ 강의 시작 10분 전까지 입실 부탁드립니다.")
-    else:
-        overview_rows.append("교육시간 : 과정별 안내에 따라 별도 확인 부탁드립니다.")
     info_html = build_bullet_rows(info_text.split("\n"), text_color=section_text_color)
     contacts_html = build_contact_rows(edited_contacts, text_color=section_text_color)
     top_logo_html = build_logo_row(logo_image_data_url, logo_position, "top", logo_max_height)
@@ -3207,21 +2959,6 @@ def build_final_mail_html(
     }
     welcome_body_html = render_template_html(welcome_body_text, template_replacements)
     time_notice_html = render_template_html(time_notice_text, template_replacements)
-
-    clean_zoom_url = str(zoom_url or "").strip()
-    if clean_zoom_url and not re.match(r"^https?://", clean_zoom_url, flags=re.IGNORECASE):
-        clean_zoom_url = "https://" + clean_zoom_url
-    zoom_button_html = ""
-    if clean_zoom_url:
-        zoom_button_html = f"""
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="overview" style="width: 100%; border-collapse: collapse; margin: 0 0 24px 0;">
-            <tr>
-                <td style="text-align: center; padding: 0;">
-                    <a href="{esc_attr(clean_zoom_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 11px 24px; background-color: {main_color}; color: {curr_header_text_color}; text-decoration: none; border-radius: 8px; font-size: 15px; line-height: 20px; font-weight: 800;">ZOOM 바로가기</a>
-                </td>
-            </tr>
-        </table>
-        """
 
     map_html = ""
     if str(map_image_src or "").strip():
@@ -3267,17 +3004,27 @@ def build_final_mail_html(
 
         <div style="border-top: 1px dotted #999999; height: 1px; line-height: 1px; font-size: 0; margin: 0 0 26px 0;">&nbsp;</div>
 
-        {build_section_title(1, overview_section_title, main_color, curr_header_text_color, "overview")}
+        {build_section_title(1, "교육 개요", main_color, curr_header_text_color, "overview")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="overview" style="width: 100%; border-collapse: collapse; margin: 0 0 18px 0;">
-            {build_bullet_rows(overview_rows, text_color=section_text_color)}
+            {build_bullet_rows([
+                f"교육명 : {full_course_name}",
+                f"교육일정 : {date_range}  *집합 교육 기준",
+                "교육시간 : 하기 표 참고  ※ 강의 시작 10분 전까지 입실 부탁드립니다.",
+            ], text_color=section_text_color)}
         </table>
 
-        {zoom_button_html}
+        {curriculum_title_html}
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="curriculum" style="width: 100%; border-collapse: collapse; margin: 10px 0 34px 0; border-top: 1px solid #D8DEE6; border-left: 1px solid #D8DEE6; background-color: #FFFFFF;">
+            <thead>
+                {curriculum_header_html}
+            </thead>
+            <tbody style="background-color: #FFFFFF;">
+                {curriculum_html}
+            </tbody>
+        </table>
 
-        {curriculum_block_html}
-
-        {build_section_title(2, location_section_title, main_color, curr_header_text_color, "location")}
+        {build_section_title(2, "교육 장소", main_color, curr_header_text_color, "location")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="location" style="width: 100%; border-collapse: collapse; margin: 0 0 32px 0;">
             {build_bullet_rows(location_lines, text_color=section_text_color)}
@@ -3288,13 +3035,13 @@ def build_final_mail_html(
             </tr>
         </table>
 
-        {build_section_title(3, notice_section_title, main_color, curr_header_text_color, "notice")}
+        {build_section_title(3, "안내 사항", main_color, curr_header_text_color, "notice")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="notice" style="width: 100%; border-collapse: collapse; margin: 0 0 30px 0;">
             {info_html}
         </table>
 
-        {build_section_title(4, contact_section_title, main_color, curr_header_text_color, "contact")}
+        {build_section_title(4, "관련 문의", main_color, curr_header_text_color, "contact")}
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" data-zone="contact" style="width: 100%; border-collapse: collapse; margin: 0 0 10px 0;">
             {contacts_html}
@@ -3322,7 +3069,6 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 <head>
     <meta charset="utf-8" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs/dist/pptxgen.bundle.js"></script>
     <style>
         body {{
             margin: 0;
@@ -3334,7 +3080,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             width: min(760px, calc(100vw - 28px));
             margin: 0 auto 10px auto;
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             position: sticky;
             top: 0;
@@ -3345,10 +3091,8 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
         .tool-btn {{
             border: 1px solid {tool_btn_border};
             border-radius: 12px;
-            min-height: 40px;
-            padding: 5px 6px;
-            font-size: 12px;
-            line-height: 15px;
+            height: 40px;
+            font-size: 13px;
             font-weight: 800;
             color: #FFFFFF;
             background: {tool_btn_bg};
@@ -3375,13 +3119,12 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 </head>
 <body>
     <div class="toolbar">
-        <button class="tool-btn" onclick="copyMailContent()">📋 아웃룩<br>서식 복사</button>
-        <button class="tool-btn" onclick="copyHtmlCode()">🖱️ HTML<br>코드 복사</button>
-        <button class="tool-btn" onclick="downloadImage('png')">🖼️ PNG<br>저장</button>
-        <button class="tool-btn" onclick="downloadImage('jpeg')">🖼️ JPG<br>저장</button>
-        <button class="tool-btn" onclick="downloadPpt()">📊 PPT<br>저장</button>
+        <button class="tool-btn" onclick="copyMailContent()">📋 아웃룩 서식 복사</button>
+        <button class="tool-btn" onclick="copyHtmlCode()">🖱️ HTML 코드 복사</button>
+        <button class="tool-btn" onclick="downloadImage('png')">🖼️ PNG 저장</button>
+        <button class="tool-btn" onclick="downloadImage('jpeg')">🖼️ JPG 저장</button>
     </div>
-    <div class="note">PPT는 현재 안내문을 같은 비율의 이미지로 변환해 1장에 그대로 배치합니다.</div>
+    <div class="note">미리보기는 축소해서 보여주고, 저장 이미지는 원본 크기로 생성합니다.</div>
     <div class="preview-area">
 """
         + final_mail_html
@@ -3468,13 +3211,15 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             }
         }
 
-        async function renderNoticeCanvas() {
+        async function downloadImage(format) {
             const source = getContent();
             if (!source) {
-                throw new Error('저장할 안내문을 찾지 못했습니다.');
+                alert('저장할 안내문을 찾지 못했습니다.');
+                return;
             }
             if (typeof html2canvas === 'undefined') {
-                throw new Error('이미지 저장 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
+                alert('이미지 저장 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
+                return;
             }
 
             const clone = source.cloneNode(true);
@@ -3492,7 +3237,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             document.body.appendChild(offscreen);
 
             try {
-                return await html2canvas(clone, {
+                const canvas = await html2canvas(clone, {
                     scale: 2,
                     backgroundColor: '#ffffff',
                     useCORS: true,
@@ -3503,14 +3248,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
                     windowWidth: 1200,
                     windowHeight: clone.scrollHeight + 100
                 });
-            } finally {
-                document.body.removeChild(offscreen);
-            }
-        }
 
-        async function downloadImage(format) {
-            try {
-                const canvas = await renderNoticeCanvas();
                 const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
                 const extension = format === 'jpeg' ? 'jpg' : 'png';
                 const dataUrl = canvas.toDataURL(mimeType, 0.95);
@@ -3522,42 +3260,9 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
                 document.body.removeChild(link);
             } catch (error) {
                 console.error(error);
-                alert(error.message || '이미지 저장에 실패했습니다.');
-            }
-        }
-
-        async function downloadPpt() {
-            try {
-                if (typeof PptxGenJS === 'undefined') {
-                    throw new Error('PPT 저장 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
-                }
-                const canvas = await renderNoticeCanvas();
-                const imageData = canvas.toDataURL('image/png');
-                const ratio = canvas.height / canvas.width;
-
-                let slideWidth = 10;
-                let slideHeight = slideWidth * ratio;
-                if (slideHeight > 55) {
-                    slideHeight = 55;
-                    slideWidth = slideHeight / ratio;
-                }
-
-                const pptx = new PptxGenJS();
-                pptx.defineLayout({ name: 'NOTICE_LAYOUT', width: slideWidth, height: slideHeight });
-                pptx.layout = 'NOTICE_LAYOUT';
-                pptx.author = '교육 안내문 작성 도구';
-                pptx.subject = '교육 안내문';
-                pptx.title = EXPORT_BASE_NAME;
-                pptx.company = 'Multicampus';
-                pptx.lang = 'ko-KR';
-
-                const slide = pptx.addSlide();
-                slide.background = { color: 'FFFFFF' };
-                slide.addImage({ data: imageData, x: 0, y: 0, w: slideWidth, h: slideHeight });
-                await pptx.writeFile({ fileName: EXPORT_BASE_NAME + '.pptx', compression: true });
-            } catch (error) {
-                console.error(error);
-                alert(error.message || 'PPT 저장에 실패했습니다.');
+                alert('이미지 저장에 실패했습니다. 외부 웹 이미지 URL 대신 지도/로고 이미지를 첨부한 뒤 다시 저장해 주세요.');
+            } finally {
+                document.body.removeChild(offscreen);
             }
         }
     </script>
@@ -3571,7 +3276,6 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 # 쿼리 파라미터 기반 스포이드 색상 반영
 # -----------------------------
 init_defaults()
-migrate_curriculum_day_defaults()
 apply_pending_location_update()
 poll_split_naver_jobs()
 
@@ -3630,29 +3334,6 @@ with col_input:
                 ).strip()
             else:
                 delivery_type = delivery_mode
-
-            delivery_type_lower = str(delivery_type or "").strip().lower()
-            is_online_delivery = delivery_mode == "비대면" or any(
-                token in delivery_type_lower for token in ["비대면", "온라인", "zoom", "줌", "하이브리드"]
-            )
-            if is_online_delivery:
-                zoom_url = st.text_input(
-                    "ZOOM/온라인 과정 바로가기 링크",
-                    key="zoom_url",
-                    placeholder="https://zoom.us/j/...",
-                    help="비대면 또는 하이브리드 과정일 때 안내문에 바로가기 버튼을 표시합니다.",
-                )
-            else:
-                zoom_url = ""
-
-            with st.expander("섹션 제목 수정", expanded=False):
-                section_title_col1, section_title_col2 = st.columns(2)
-                with section_title_col1:
-                    overview_section_title = st.text_input("1번 제목", key="overview_section_title")
-                    notice_section_title = st.text_input("3번 제목", key="notice_section_title")
-                with section_title_col2:
-                    location_section_title = st.text_input("2번 제목", key="location_section_title")
-                    contact_section_title = st.text_input("4번 제목", key="contact_section_title")
 
         # 2. 상단 안내 문구
         with st.container(border=True):
@@ -3735,62 +3416,7 @@ with col_input:
         # 4. 커리큘럼
         with st.container(border=True):
             st.markdown("#### 커리큘럼")
-            show_curriculum_table = st.checkbox(
-                "교육 시간표 표시",
-                key="show_curriculum_table",
-                help="체크를 해제하면 최종 안내문에서 커리큘럼 표를 표시하지 않습니다.",
-            )
             curriculum_title = st.text_input("커리큘럼 표 이름", key="curriculum_title")
-            if not show_curriculum_table:
-                st.caption("교육 시간표 표시를 해제했습니다. 입력값은 유지되지만 최종 안내문에는 표가 나오지 않습니다.")
-
-            with st.expander("엑셀 시간표 불러오기", expanded=False):
-                st.caption("첫 번째 시트에서 Day·시간·교육 내용·강사/비고 열을 찾아 불러옵니다. 지원 형식: .xlsx, .xlsm")
-                curriculum_excel_file = st.file_uploader(
-                    "시간표 엑셀 파일",
-                    type=["xlsx", "xlsm"],
-                    key="curriculum_excel_uploader",
-                )
-                if st.button("엑셀 시간표 적용", key="apply_curriculum_excel", use_container_width=True):
-                    try:
-                        current_columns = [
-                            str(row.get("column_name", "") or "").strip()
-                            for row in to_records(st.session_state.get("curriculum_column_defs", []))
-                            if str(row.get("column_name", "") or "").strip()
-                        ]
-                        imported_rows, imported_columns, import_message = parse_curriculum_excel(
-                            curriculum_excel_file,
-                            current_columns,
-                        )
-                        st.session_state.curriculum = imported_rows
-                        st.session_state.curriculum_column_defs = [
-                            {"column_name": column} for column in imported_columns
-                        ]
-                        st.session_state.curriculum_columns_text = ", ".join(imported_columns)
-                        st.session_state.excel_import_message = import_message
-                        st.session_state.pop("curr_editor", None)
-                        st.session_state.pop("curriculum_column_defs_editor", None)
-                        for state_key in list(st.session_state.keys()):
-                            if state_key.startswith("white_grid_curr_editor_") or state_key.startswith("white_grid_curriculum_column_defs_editor_"):
-                                st.session_state.pop(state_key, None)
-                        st.rerun()
-                    except Exception as exc:
-                        st.session_state.excel_import_message = str(exc)
-                if st.session_state.get("excel_import_message"):
-                    st.caption(st.session_state.excel_import_message)
-
-            with st.expander("시간표 음영 색상", expanded=False):
-                shade_col1, shade_col2 = st.columns(2)
-                with shade_col1:
-                    curriculum_odd_row_color = st.color_picker(
-                        "홀수 행 음영",
-                        key="curriculum_odd_row_color_picker",
-                    )
-                with shade_col2:
-                    curriculum_even_row_color = st.color_picker(
-                        "짝수 행 음영",
-                        key="curriculum_even_row_color_picker",
-                    )
 
             with st.expander("표 헤더 편집", expanded=False):
                 if st.session_state.get("app_theme") == "화이트 모드":
@@ -3816,14 +3442,14 @@ with col_input:
                 curriculum_columns = [str(row.get("column_name", "") or "").strip() for row in header_records]
                 curriculum_columns = [col for col in curriculum_columns if col]
                 if not curriculum_columns:
-                    curriculum_columns = ["시간", "Day", "교육 내용", "강사/비고"]
+                    curriculum_columns = ["시간", "일차", "교육 내용", "강사/비고"]
                 st.session_state.curriculum_column_defs = [{"column_name": col} for col in curriculum_columns]
                 st.session_state.curriculum_columns_text = ", ".join(curriculum_columns)
 
             curriculum_columns = [str(row.get("column_name", "") or "").strip() for row in st.session_state.curriculum_column_defs]
             curriculum_columns = [col for col in curriculum_columns if col]
             if not curriculum_columns:
-                curriculum_columns = parse_curriculum_columns(st.session_state.get("curriculum_columns_text", "Day, 시간, 교육 내용, 강사/비고"))
+                curriculum_columns = parse_curriculum_columns(st.session_state.get("curriculum_columns_text", "시간, 일차, 교육 내용, 강사/비고"))
                 st.session_state.curriculum_column_defs = [{"column_name": col} for col in curriculum_columns]
             curriculum_columns_text = ", ".join(curriculum_columns)
 
@@ -4047,7 +3673,6 @@ final_mail_html = build_final_mail_html(
     edited_curriculum=edited_curr,
     curriculum_columns_text=curriculum_columns_text,
     curriculum_title=curriculum_title,
-    show_curriculum_table=show_curriculum_table,
     info_text=info_text,
     edited_contacts=edited_contacts,
     main_color=main_color,
@@ -4059,13 +3684,6 @@ final_mail_html = build_final_mail_html(
     logo_max_height=logo_max_height,
     font_stack=font_stack,
     embedded_font_css=embedded_font_css,
-    zoom_url=zoom_url,
-    overview_section_title=overview_section_title,
-    location_section_title=location_section_title,
-    notice_section_title=notice_section_title,
-    contact_section_title=contact_section_title,
-    curriculum_odd_row_color=curriculum_odd_row_color,
-    curriculum_even_row_color=curriculum_even_row_color,
 )
 
 
