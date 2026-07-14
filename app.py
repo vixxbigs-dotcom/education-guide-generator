@@ -3308,6 +3308,398 @@ def build_final_mail_html(
 """
 
 
+
+
+def _ppt_rgb(hex_color: str, fallback: str = "#0088C9"):
+    """#RRGGBB 문자열을 python-pptx RGBColor로 변환합니다."""
+    try:
+        from pptx.dml.color import RGBColor
+        clean = str(hex_color or fallback).strip().lstrip("#")
+        if len(clean) != 6:
+            clean = str(fallback).strip().lstrip("#")
+        return RGBColor(int(clean[0:2], 16), int(clean[2:4], 16), int(clean[4:6], 16))
+    except Exception:
+        from pptx.dml.color import RGBColor
+        return RGBColor(0, 136, 201)
+
+
+def _data_url_to_image_stream(data_url: str):
+    """data:image/...;base64 문자열을 BytesIO로 변환합니다."""
+    clean = str(data_url or "").strip()
+    if not clean.startswith("data:image/") or ";base64," not in clean:
+        return None
+    try:
+        raw = base64.b64decode(clean.split(",", 1)[1])
+        return io.BytesIO(raw)
+    except Exception:
+        return None
+
+
+def _add_ppt_textbox(slide, text: str, x: float, y: float, w: float, h: float, *,
+                     font_size: int = 11, bold: bool = False, color: str = "#222222",
+                     align: str = "left", fill: str | None = None, border: str | None = None,
+                     radius: bool = False):
+    """편집 가능한 PPT 텍스트박스를 추가합니다."""
+    from pptx.util import Inches, Pt
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+
+    shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE
+    shape = slide.shapes.add_shape(shape_type, Inches(x), Inches(y), Inches(w), Inches(h))
+    if fill:
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _ppt_rgb(fill)
+    else:
+        shape.fill.background()
+    if border:
+        shape.line.color.rgb = _ppt_rgb(border)
+        shape.line.width = Pt(0.6)
+    else:
+        shape.line.fill.background()
+
+    tf = shape.text_frame
+    tf.clear()
+    tf.margin_left = Inches(0.08)
+    tf.margin_right = Inches(0.08)
+    tf.margin_top = Inches(0.04)
+    tf.margin_bottom = Inches(0.04)
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p = tf.paragraphs[0]
+    if align == "center":
+        p.alignment = PP_ALIGN.CENTER
+    elif align == "right":
+        p.alignment = PP_ALIGN.RIGHT
+    else:
+        p.alignment = PP_ALIGN.LEFT
+    run = p.add_run()
+    run.text = str(text or "")
+    run.font.size = Pt(font_size)
+    run.font.bold = bool(bold)
+    run.font.name = "맑은 고딕"
+    run.font.color.rgb = _ppt_rgb(color, "#222222")
+    return shape
+
+
+def _add_ppt_multiline_textbox(slide, lines: list[str], x: float, y: float, w: float, h: float, *,
+                               font_size: int = 10, color: str = "#343A40", bold_first: bool = False):
+    """여러 줄 텍스트를 편집 가능한 PPT 텍스트박스로 추가합니다."""
+    from pptx.util import Inches, Pt
+    from pptx.enum.text import MSO_ANCHOR
+
+    textbox = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = textbox.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+    tf.margin_left = Inches(0.02)
+    tf.margin_right = Inches(0.02)
+    tf.margin_top = Inches(0.01)
+    tf.margin_bottom = Inches(0.01)
+
+    clean_lines = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    if not clean_lines:
+        clean_lines = [""]
+    for i, line in enumerate(clean_lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = line
+        p.font.size = Pt(font_size)
+        p.font.name = "맑은 고딕"
+        p.font.color.rgb = _ppt_rgb(color)
+        p.font.bold = bool(bold_first and i == 0)
+        p.space_after = Pt(2)
+    return textbox
+
+
+def _add_ppt_section_title(slide, number: int, title: str, x: float, y: float, w: float,
+                           main_color: str, text_color: str) -> float:
+    """안내문 섹션 제목을 편집 가능한 도형/텍스트로 추가하고 다음 y좌표를 반환합니다."""
+    _add_ppt_textbox(slide, "", x, y, 0.06, 0.30, fill=main_color, border=main_color)
+    _add_ppt_textbox(
+        slide,
+        f"{number}. {title}",
+        x + 0.06,
+        y,
+        min(w - 0.06, 2.7),
+        0.30,
+        font_size=12,
+        bold=True,
+        color=text_color,
+        fill=main_color,
+        border=main_color,
+    )
+    return y + 0.42
+
+
+def _add_ppt_bullets(slide, lines: list[str], x: float, y: float, w: float, *,
+                     font_size: int = 10, color: str = "#343A40") -> float:
+    """하이픈 bullet을 편집 가능한 텍스트로 추가합니다."""
+    clean_lines = [normalize_bullet(line) for line in lines if normalize_bullet(line)]
+    if not clean_lines:
+        clean_lines = ["입력된 내용이 없습니다."]
+    line_h = 0.22
+    height = max(0.26, len(clean_lines) * line_h + 0.02)
+    _add_ppt_multiline_textbox(slide, [f"- {line}" for line in clean_lines], x, y, w, height, font_size=font_size, color=color)
+    return y + height + 0.12
+
+
+def _add_ppt_table(slide, rows: list[dict], columns: list[str], x: float, y: float, w: float,
+                   main_color: str, text_color: str, odd_fill: str = "#FFFFFF", even_fill: str = "#FFFFFF") -> float:
+    """커리큘럼을 편집 가능한 PPT 표로 추가합니다."""
+    from pptx.util import Inches, Pt
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+
+    normalized = normalize_curriculum_for_columns(rows, columns)
+    max_rows = max(1, len(normalized))
+    row_h = 0.34
+    table_h = 0.36 + (max_rows * row_h)
+    table_shape = slide.shapes.add_table(max_rows + 1, len(columns), Inches(x), Inches(y), Inches(w), Inches(table_h))
+    table = table_shape.table
+
+    # 열 너비 기본값
+    weights = []
+    for col in columns:
+        if any(token in col for token in ["내용", "주제", "과정"]):
+            weights.append(2.7)
+        elif any(token in col for token in ["비고", "강사"]):
+            weights.append(1.15)
+        else:
+            weights.append(0.85)
+    total_weight = sum(weights) or 1
+    for idx, weight in enumerate(weights):
+        table.columns[idx].width = Inches(w * weight / total_weight)
+
+    for col_idx, col in enumerate(columns):
+        cell = table.cell(0, col_idx)
+        cell.text = str(col)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = _ppt_rgb(main_color)
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        for paragraph in cell.text_frame.paragraphs:
+            paragraph.alignment = PP_ALIGN.CENTER
+            for run in paragraph.runs:
+                run.font.name = "맑은 고딕"
+                run.font.size = Pt(9.5)
+                run.font.bold = True
+                run.font.color.rgb = _ppt_rgb(text_color, "#FFFFFF")
+
+    for row_idx, row in enumerate(normalized, start=1):
+        row_fill = odd_fill if row_idx % 2 == 1 else even_fill
+        for col_idx, col in enumerate(columns):
+            value = _cell_value_by_column(row, col) or "-"
+            cell = table.cell(row_idx, col_idx)
+            cell.text = str(value)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _ppt_rgb(row_fill, "#FFFFFF")
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            is_long_text = any(token in col for token in ["내용", "주제", "과정", "비고", "메모"])
+            for paragraph in cell.text_frame.paragraphs:
+                paragraph.alignment = PP_ALIGN.LEFT if is_long_text else PP_ALIGN.CENTER
+                paragraph.space_after = Pt(0)
+                for run in paragraph.runs:
+                    run.font.name = "맑은 고딕"
+                    run.font.size = Pt(8.5)
+                    run.font.bold = bool(is_long_text)
+                    run.font.color.rgb = _ppt_rgb("#1F2933")
+
+    return y + table_h + 0.28
+
+
+def _add_data_url_picture(slide, data_url: str, x: float, y: float, w: float, max_h: float) -> float:
+    """data URL 이미지를 PPT에 추가하고 다음 y좌표를 반환합니다."""
+    from pptx.util import Inches
+    stream = _data_url_to_image_stream(data_url)
+    if not stream:
+        return y
+    try:
+        from PIL import Image
+        stream.seek(0)
+        image = Image.open(stream)
+        img_w, img_h = image.size
+        stream.seek(0)
+        ratio = img_h / img_w if img_w else 0.6
+        h = min(max_h, w * ratio)
+        slide.shapes.add_picture(stream, Inches(x), Inches(y), width=Inches(w), height=Inches(h))
+        return y + h + 0.12
+    except Exception:
+        return y
+
+
+def _add_logo_to_ppt(slide, logo_data_url: str, logo_position: str, slide_w: float, slide_h: float, max_h: float) -> None:
+    """로고 이미지를 사용자가 지정한 위치에 이미지로 추가합니다."""
+    from pptx.util import Inches
+    stream = _data_url_to_image_stream(logo_data_url)
+    if not stream:
+        return
+    try:
+        from PIL import Image
+        stream.seek(0)
+        image = Image.open(stream)
+        img_w, img_h = image.size
+        stream.seek(0)
+        h = min(max_h, 0.65)
+        w = h * (img_w / img_h) if img_h else 1.6
+        w = min(w, 2.4)
+        x = slide_w - 0.45 - w if "우측" in logo_position else 0.45
+        y = slide_h - 0.55 - h if "하단" in logo_position else 0.45
+        slide.shapes.add_picture(stream, Inches(x), Inches(y), width=Inches(w), height=Inches(h))
+    except Exception:
+        return
+
+
+def build_editable_pptx_bytes(
+    *,
+    company_name: str,
+    course_name: str,
+    date_range: str,
+    day1_time: str,
+    day2_time: str,
+    place_name: str,
+    map_image_src: str,
+    delivery_type: str,
+    welcome_title: str,
+    welcome_body_text: str,
+    time_notice_text: str,
+    edited_curriculum: list[dict],
+    curriculum_columns_text: str,
+    curriculum_title: str,
+    show_curriculum_table: bool,
+    info_text: str,
+    edited_contacts: list[dict],
+    main_color: str,
+    footer_color: str,
+    curr_header_text_color: str,
+    logo_image_data_url: str,
+    logo_position: str,
+    logo_max_height: int,
+    zoom_url: str = "",
+    overview_section_title: str = "교육 개요",
+    location_section_title: str = "교육 장소",
+    notice_section_title: str = "안내 사항",
+    contact_section_title: str = "관련 문의",
+    curriculum_odd_row_color: str = "#FFFFFF",
+    curriculum_even_row_color: str = "#FFFFFF",
+) -> bytes:
+    """현재 입력값을 기반으로 텍스트/도형/표가 살아있는 PPTX 1장을 생성합니다.
+
+    로고와 지도는 원본 이미지로 들어가지만, 제목/본문/섹션/시간표/문의처는
+    PowerPoint에서 직접 수정 가능한 텍스트·도형·표로 생성됩니다.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.enum.shapes import MSO_SHAPE
+
+    company_display = str(company_name or "").strip()
+    full_course_name = f"{company_display} {course_name}".strip()
+    curriculum_columns = parse_curriculum_columns(curriculum_columns_text)
+    curriculum_rows = normalize_curriculum_for_columns(edited_curriculum, curriculum_columns)
+    info_lines = [normalize_bullet(line) for line in str(info_text or "").split("\n") if normalize_bullet(line)]
+    contact_lines = []
+    for contact in to_records(edited_contacts):
+        role = str(contact.get("role", "") or "").strip()
+        phone = str(contact.get("phone", "") or "").strip()
+        if role or phone:
+            contact_lines.append(f"{role} ({phone})" if phone else role)
+
+    map_h_est = 2.15 if str(map_image_src or "").strip() else 0
+    curr_h_est = (0.8 + len(curriculum_rows) * 0.34) if show_curriculum_table else 0
+    info_h_est = max(0.45, len(info_lines) * 0.22 + 0.1)
+    contact_h_est = max(0.45, len(contact_lines) * 0.22 + 0.1)
+    slide_w = 7.6
+    slide_h = max(10.8, 5.25 + curr_h_est + map_h_est + info_h_est + contact_h_est)
+    slide_h = min(slide_h, 20.5)
+
+    prs = Presentation()
+    prs.slide_width = Inches(slide_w)
+    prs.slide_height = Inches(slide_h)
+    blank_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(blank_layout)
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = _ppt_rgb("#FFFFFF")
+
+    # 외곽 배경/상하단 브랜드 바
+    slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(slide_w), Inches(slide_h)).fill.solid()
+    slide.shapes[-1].fill.fore_color.rgb = _ppt_rgb("#FFFFFF")
+    slide.shapes[-1].line.color.rgb = _ppt_rgb("#E5E7EB")
+    slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(slide_w), Inches(0.18)).fill.solid()
+    slide.shapes[-1].fill.fore_color.rgb = _ppt_rgb(main_color)
+    slide.shapes[-1].line.color.rgb = _ppt_rgb(main_color)
+    slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(slide_h - 0.18), Inches(slide_w), Inches(0.18)).fill.solid()
+    slide.shapes[-1].fill.fore_color.rgb = _ppt_rgb(footer_color)
+    slide.shapes[-1].line.color.rgb = _ppt_rgb(footer_color)
+
+    _add_logo_to_ppt(slide, logo_image_data_url, logo_position, slide_w, slide_h, max(0.28, float(logo_max_height or 52) / 80))
+
+    x = 0.38
+    w = slide_w - 0.76
+    y = 0.58
+    _add_ppt_textbox(slide, full_course_name, x, y, w, 0.42, font_size=19, bold=True, color="#222222", align="center")
+    y += 0.62
+    _add_ppt_textbox(slide, welcome_title, x, y, w, 0.32, font_size=14, bold=True, color="#222222", align="center")
+    y += 0.34
+
+    replacements_plain = {
+        "{교육명}": full_course_name,
+        "{운영방식}": delivery_type,
+        "{1일차}": day1_time,
+        "{2일차}": day2_time,
+        "{회사명}": company_display,
+    }
+    welcome_plain = str(welcome_body_text or "")
+    time_plain = str(time_notice_text or "")
+    for token, value in replacements_plain.items():
+        welcome_plain = welcome_plain.replace(token, str(value or ""))
+        time_plain = time_plain.replace(token, str(value or ""))
+    _add_ppt_multiline_textbox(slide, welcome_plain.split("\n"), x + 0.25, y, w - 0.5, 0.55, font_size=10, color="#343A40")
+    y += 0.58
+    _add_ppt_textbox(slide, time_plain, x + 0.25, y, w - 0.5, 0.30, font_size=10, bold=True, color="#C1121F", align="center")
+    y += 0.52
+
+    # 1. 교육 개요
+    y = _add_ppt_section_title(slide, 1, overview_section_title, x, y, w, main_color, curr_header_text_color)
+    overview_lines = [
+        f"교육명 : {full_course_name}",
+        f"교육일정 : {date_range}  *집합 교육 기준",
+        "교육시간 : 하기 표 참고  ※ 강의 시작 10분 전까지 입실 부탁드립니다." if show_curriculum_table else "교육시간 : 과정별 안내에 따라 별도 확인 부탁드립니다.",
+    ]
+    y = _add_ppt_bullets(slide, overview_lines, x + 0.16, y, w - 0.25, font_size=9.5)
+
+    clean_zoom_url = str(zoom_url or "").strip()
+    if clean_zoom_url:
+        if not re.match(r"^https?://", clean_zoom_url, flags=re.IGNORECASE):
+            clean_zoom_url = "https://" + clean_zoom_url
+        btn = _add_ppt_textbox(slide, "ZOOM 바로가기", x + 0.16, y, 1.65, 0.34, font_size=10, bold=True, color=curr_header_text_color, fill=main_color, border=main_color, align="center", radius=True)
+        try:
+            btn.click_action.hyperlink.address = clean_zoom_url
+        except Exception:
+            pass
+        y += 0.52
+
+    if show_curriculum_table:
+        if str(curriculum_title or "").strip():
+            _add_ppt_textbox(slide, curriculum_title, x, y, w, 0.25, font_size=10, bold=True, color="#222222")
+            y += 0.30
+        y = _add_ppt_table(slide, curriculum_rows, curriculum_columns, x, y, w, main_color, curr_header_text_color, curriculum_odd_row_color, curriculum_even_row_color)
+
+    # 2. 교육 장소
+    y = _add_ppt_section_title(slide, 2, location_section_title, x, y, w, main_color, curr_header_text_color)
+    location_lines = [line.strip() for line in str(place_name or "").splitlines() if line.strip()]
+    y = _add_ppt_bullets(slide, location_lines, x + 0.16, y, w - 0.25, font_size=9.5)
+    if str(map_image_src or "").strip():
+        y = _add_data_url_picture(slide, map_image_src, x + 0.25, y, min(6.5, w - 0.5), 2.5)
+
+    # 3. 안내 사항
+    y = _add_ppt_section_title(slide, 3, notice_section_title, x, y, w, main_color, curr_header_text_color)
+    y = _add_ppt_bullets(slide, info_lines, x + 0.16, y, w - 0.25, font_size=9.5)
+
+    # 4. 관련 문의
+    y = _add_ppt_section_title(slide, 4, contact_section_title, x, y, w, main_color, curr_header_text_color)
+    _add_ppt_bullets(slide, contact_lines, x + 0.16, y, w - 0.25, font_size=9.5)
+
+    buffer = io.BytesIO()
+    prs.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def build_preview_component_html(final_mail_html: str, preview_scale: float, font_stack: str, export_base_name: str = "education_notice_photo_style", app_theme: str = "다크 모드") -> str:
     scale = max(0.45, min(1.0, float(preview_scale)))
     export_base_name_js = json.dumps(str(export_base_name or "education_notice_photo_style"), ensure_ascii=False)
@@ -3322,7 +3714,6 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
 <head>
     <meta charset="utf-8" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs/dist/pptxgen.bundle.js"></script>
     <style>
         body {{
             margin: 0;
@@ -3334,7 +3725,7 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             width: min(760px, calc(100vw - 28px));
             margin: 0 auto 10px auto;
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             position: sticky;
             top: 0;
@@ -3379,9 +3770,8 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
         <button class="tool-btn" onclick="copyHtmlCode()">🖱️ HTML<br>코드 복사</button>
         <button class="tool-btn" onclick="downloadImage('png')">🖼️ PNG<br>저장</button>
         <button class="tool-btn" onclick="downloadImage('jpeg')">🖼️ JPG<br>저장</button>
-        <button class="tool-btn" onclick="downloadPpt()">📊 PPT<br>저장</button>
     </div>
-    <div class="note">PPT는 현재 안내문을 같은 비율의 이미지로 변환해 1장에 그대로 배치합니다.</div>
+    <div class="note">PPT 다운로드는 아래 “편집 가능한 PPT 다운로드” 버튼을 사용하세요.</div>
     <div class="preview-area">
 """
         + final_mail_html
@@ -3526,40 +3916,6 @@ def build_preview_component_html(final_mail_html: str, preview_scale: float, fon
             }
         }
 
-        async function downloadPpt() {
-            try {
-                if (typeof PptxGenJS === 'undefined') {
-                    throw new Error('PPT 저장 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
-                }
-                const canvas = await renderNoticeCanvas();
-                const imageData = canvas.toDataURL('image/png');
-                const ratio = canvas.height / canvas.width;
-
-                let slideWidth = 10;
-                let slideHeight = slideWidth * ratio;
-                if (slideHeight > 55) {
-                    slideHeight = 55;
-                    slideWidth = slideHeight / ratio;
-                }
-
-                const pptx = new PptxGenJS();
-                pptx.defineLayout({ name: 'NOTICE_LAYOUT', width: slideWidth, height: slideHeight });
-                pptx.layout = 'NOTICE_LAYOUT';
-                pptx.author = '교육 안내문 작성 도구';
-                pptx.subject = '교육 안내문';
-                pptx.title = EXPORT_BASE_NAME;
-                pptx.company = 'Multicampus';
-                pptx.lang = 'ko-KR';
-
-                const slide = pptx.addSlide();
-                slide.background = { color: 'FFFFFF' };
-                slide.addImage({ data: imageData, x: 0, y: 0, w: slideWidth, h: slideHeight });
-                await pptx.writeFile({ fileName: EXPORT_BASE_NAME + '.pptx', compression: true });
-            } catch (error) {
-                console.error(error);
-                alert(error.message || 'PPT 저장에 실패했습니다.');
-            }
-        }
     </script>
 </body>
 </html>
@@ -4079,6 +4435,45 @@ download_html_document = build_download_html_document(
 download_html_bytes = ("\ufeff" + download_html_document).encode("utf-8")
 
 
+try:
+    editable_pptx_bytes = build_editable_pptx_bytes(
+        company_name=company_name,
+        course_name=course_name,
+        date_range=date_range,
+        day1_time=day1_time,
+        day2_time=day2_time,
+        place_name=display_location_text,
+        map_image_src=map_image_src,
+        delivery_type=delivery_type,
+        welcome_title=welcome_title,
+        welcome_body_text=welcome_body_text,
+        time_notice_text=time_notice_text,
+        edited_curriculum=to_records(edited_curr),
+        curriculum_columns_text=curriculum_columns_text,
+        curriculum_title=curriculum_title,
+        show_curriculum_table=show_curriculum_table,
+        info_text=info_text,
+        edited_contacts=to_records(edited_contacts),
+        main_color=main_color,
+        footer_color=footer_color,
+        curr_header_text_color=curr_header_text_color,
+        logo_image_data_url=logo_image_data_url,
+        logo_position=logo_position,
+        logo_max_height=logo_max_height,
+        zoom_url=zoom_url,
+        overview_section_title=overview_section_title,
+        location_section_title=location_section_title,
+        notice_section_title=notice_section_title,
+        contact_section_title=contact_section_title,
+        curriculum_odd_row_color=curriculum_odd_row_color,
+        curriculum_even_row_color=curriculum_even_row_color,
+    )
+    editable_pptx_error = ""
+except Exception as exc:
+    editable_pptx_bytes = b""
+    editable_pptx_error = str(exc)
+
+
 with col_output:
     st.subheader("출력 미리보기")
 
@@ -4117,7 +4512,7 @@ with col_output:
                 with col_p2:
                     st.slider("미리보기 배율", min_value=50, max_value=100, step=2, key="preview_scale_percent")
 
-                col_d1, col_d2 = st.columns([1, 1])
+                col_d1, col_d2, col_d3 = st.columns([1, 1, 1])
                 with col_d1:
                     st.download_button(
                         label="⬇️ HTML 파일 다운로드",
@@ -4127,6 +4522,18 @@ with col_output:
                         use_container_width=True,
                     )
                 with col_d2:
+                    if editable_pptx_error:
+                        st.button("📊 PPT 생성 오류", disabled=True, use_container_width=True)
+                        st.caption(f"PPT 생성 오류: {editable_pptx_error}")
+                    else:
+                        st.download_button(
+                            label="📊 편집 가능한 PPT 다운로드",
+                            data=editable_pptx_bytes,
+                            file_name=f"{export_file_base}.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            use_container_width=True,
+                        )
+                with col_d3:
                     st.button("🔄 입력 내용 전체 초기화", on_click=reset_all_fields, use_container_width=True)
 
         with tab_code:
